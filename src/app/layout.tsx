@@ -2,7 +2,6 @@ import type { Metadata } from "next";
 import { Noto_Sans_KR } from "next/font/google";
 import "./globals.css";
 import { MSWProvider as MSWComponent } from "./MSWComponent";
-import { SkunivAdPopup } from "@/src/components/layout/SkunivAdPopup";
 
 const notoSansKr = Noto_Sans_KR({
   variable: "--font-noto-sans-kr",
@@ -27,7 +26,6 @@ export default function RootLayout({ children }: LayoutProps<"/">) {
     >
       <body className="flex min-h-full flex-col">
         <MSWComponent>{children}</MSWComponent>
-        <SkunivAdPopup />
       </body>
     </html>
   );
