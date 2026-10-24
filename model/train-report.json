@@ -1,0 +1,131 @@
+{
+  "trainedAt": "2026-10-24T16:42:33+09:00",
+  "input": {
+    "file": "beec/src/main/resources/seoul-apartments.json",
+    "sha256": "6b3e1b7aa9f427ec2cb89bd5062768d41b31f63b1aff9a7a6ccd217738c3cd87"
+  },
+  "output": {
+    "file": "beec/src/main/resources/model.json",
+    "sha256": "525b8c842f7239850f4154b8e4103272f5d3e26d2564fa42331892e76521a698"
+  },
+  "environment": {
+    "python": "3.13.17",
+    "scikit-learn": "1.9.1",
+    "numpy": "2.5.3"
+  },
+  "settings": {
+    "seed": 42,
+    "folds": 5,
+    "gbm": {
+      "n_estimators": 200,
+      "learning_rate": 0.05,
+      "max_depth": 3,
+      "subsample": 0.8,
+      "min_samples_leaf": 5,
+      "random_state": 42
+    },
+    "gate": {
+      "pointMaxMae": 30.0,
+      "rangeMaxMae": 45.0,
+      "minSamples": 8
+    },
+    "columns": [
+      "준공연도",
+      "단열기준시기",
+      "세대수",
+      "동수",
+      "연면적",
+      "세대당면적",
+      "계단식",
+      "복도식",
+      "혼합식",
+      "복도기타",
+      "개별난방",
+      "지역난방",
+      "중앙난방",
+      "난방기타"
+    ],
+    "imputation": "학습 데이터 중앙값 (교차검증 중에는 fold 별로 계산)"
+  },
+  "labels": {
+    "total": 324,
+    "continuous": 223,
+    "gradeMedian": 101,
+    "excludedRebuild": 49
+  },
+  "metrics": {
+    "maeContinuous": 23.95,
+    "r2Continuous": 0.62,
+    "maeAllLabels_reference": 24.34,
+    "baselineMae": 40.87,
+    "baselineDefinition": "모델 없이 같은 단열기준 시기 단지들의 중앙값으로 예측 (같은 5-fold, 연속값 기준)",
+    "improvementVsBaselinePct": 41.4
+  },
+  "gate": {
+    "단열기준 이전": {
+      "n": 0,
+      "contN": 0,
+      "mae": null,
+      "policy": "refuse",
+      "reason": "이 시기 인증 사례가 없습니다"
+    },
+    "1980년 기준": {
+      "n": 0,
+      "contN": 0,
+      "mae": null,
+      "policy": "refuse",
+      "reason": "이 시기 인증 사례가 없습니다"
+    },
+    "1987년 기준": {
+      "n": 5,
+      "contN": 0,
+      "mae": 23.7,
+      "policy": "refuse",
+      "reason": "교차검증 평균오차 23.7 kWh (검증 표본 5개, 연속값 0개) — 검증 표본이 8개 미만이라 판정하지 않습니다"
+    },
+    "2001년 기준": {
+      "n": 16,
+      "contN": 4,
+      "mae": 24.0,
+      "policy": "range",
+      "reason": "교차검증 평균오차 17.9 kWh (검증 표본 16개, 연속값 4개) — 연속값 검증 표본이 8개 미만이라 범위로만 표시합니다 (범위 폭은 전체 오차 24.0 kWh 를 씁니다)"
+    },
+    "2008년 기준": {
+      "n": 17,
+      "contN": 3,
+      "mae": 24.0,
+      "policy": "range",
+      "reason": "교차검증 평균오차 8.4 kWh (검증 표본 17개, 연속값 3개) — 연속값 검증 표본이 8개 미만이라 범위로만 표시합니다 (범위 폭은 전체 오차 24.0 kWh 를 씁니다)"
+    },
+    "2013년 기준": {
+      "n": 24,
+      "contN": 4,
+      "mae": 50.6,
+      "policy": "refuse",
+      "reason": "교차검증 평균오차 50.6 kWh (검증 표본 24개, 연속값 4개)"
+    },
+    "2016년 기준": {
+      "n": 40,
+      "contN": 14,
+      "mae": 27.6,
+      "policy": "point",
+      "reason": "교차검증 평균오차 27.6 kWh (검증 표본 40개, 연속값 14개)"
+    },
+    "2018년 이후": {
+      "n": 222,
+      "contN": 198,
+      "mae": 23.5,
+      "policy": "point",
+      "reason": "교차검증 평균오차 23.5 kWh (검증 표본 222개, 연속값 198개)"
+    }
+  },
+  "uncertifiedOutcome": {
+    "point": 198,
+    "range": 976,
+    "refuse": 1377,
+    "noPrediction": 13,
+    "total": 2564,
+    "notEstimated": 1390
+  },
+  "predictions": 2875
+}

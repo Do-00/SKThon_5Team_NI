@@ -24,8 +24,11 @@ import { mapSimulateResponse, toSimulatePurpose } from "@/src/lib/what-if";
 
 // gemini-2.0-flash 는 서비스 종료(404). 3.6-flash 는 한 번에 50초 이상 걸리고 과부하(503)가
 // 잦아서, 사고를 최소로 둔 3.5-flash(약 2초)를 쓴다.
-const GEMINI_MODEL = "gemini-3.5-flash";
-const GEMINI_ENDPOINT = `https://generativelanguage.googleapis.com/v1beta/models/${GEMINI_MODEL}:generateContent`;
+const GEMINI_MODELS = (process.env.GEMINI_MODEL || "gemini-3.5-flash-lite,gemini-3.1-flash-lite,gemini-3.7-flash,gemini-3.5-flash,gemini-3.6-flash,gemini-3-flash-preview")
+  .split(",")
+  .map((m) => m.trim())
+  .filter(Boolean);
+const geminiEndpoint = (model: string) => `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent`;
 /** 이 시간 안에 답이 없으면 규칙 기반 리포트로 넘어간다 — 카드가 스켈레톤으로 오래 멈춰 있지 않게. */
 const GEMINI_TIMEOUT_MS = 60_000;
 
@@ -67,11 +70,8 @@ export async function POST(request: Request) {
   }
 
   try {
-    const res = await fetch(`${GEMINI_ENDPOINT}?key=${apiKey}`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      signal: AbortSignal.timeout(GEMINI_TIMEOUT_MS),
-      body: JSON.stringify({
+    // 과부하(503)·호출 제한(429)은 잠깐 뒤 다시 하면 대개 풀린다 — 두 번까지 다시 시도한다.
+    const body = JSON.stringify({
         contents: [{ parts: [{ text: buildRemodelReportPrompt(input, reference) }] }],
         generationConfig: {
           // 현재 소요량 추정까지 맡기므로 오래 생각하게 둔다. 사고 토큰도 이 한도에서 빠져서 넉넉히.
@@ -81,8 +81,23 @@ export async function POST(request: Request) {
           responseMimeType: "application/json",
           responseSchema: REMODEL_REPORT_SCHEMA,
         },
-      }),
-    });
+      });
+    let res!: Response;
+    for (const model of GEMINI_MODELS) {
+      for (const delay of [0, 800]) {
+        if (delay) await new Promise((r) => setTimeout(r, delay));
+        res = await fetch(`${geminiEndpoint(model)}?key=${apiKey}`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          signal: AbortSignal.timeout(GEMINI_TIMEOUT_MS),
+          body,
+        });
+        if (res.ok || ![503].includes(res.status)) break;
+        await res.body?.cancel();
+      }
+      if (res.ok || ![429, 404, 503].includes(res.status)) break;
+      console.warn(`[api/remodel-report] ${model} → ${res.status}, 다음 모델로 넘어갑니다`);
+    }
 
     if (!res.ok) {
       // Google 쪽 에러 본문에는 키가 들어 있지 않다 — 사유 확인용으로 앞부분만 남긴다.

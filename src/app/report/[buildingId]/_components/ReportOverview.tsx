@@ -8,7 +8,7 @@ import { SectionHeader } from "@/src/components/layout/SectionHeader";
 import { Badge, ButtonLink, Card, Icon, Tab, TabList, TabPanel, Tabs } from "@/src/components/ui";
 import type { IconName } from "@/src/components/ui";
 import { PRIMARY_ENERGY_UNIT, type GradeCode } from "@/src/data/grades";
-import { formatManwon, formatNumber, formatPercent, formatTonsCO2 } from "@/src/lib/format";
+import { formatManwon, formatNumber, formatTonsCO2 } from "@/src/lib/format";
 import { useWhatIfProjection } from "../_lib/use-what-if-projection";
 import { ReportActions } from "./ReportActions";
 
@@ -104,7 +104,6 @@ export function ReportOverview({
   const metricCards: { icon: IconName; label: string; value: string }[] = metrics
     ? [
         { icon: "thermometer", label: "연간 에너지 비용", value: formatManwon(metrics.annualEnergyCostManwon) },
-        { icon: "trending-down", label: "개선 여력", value: formatPercent(metrics.percentileRank) },
         { icon: "droplet", label: "연간 탄소 배출", value: formatTonsCO2(metrics.annualCarbonEmissionTons) },
       ]
     : [];
@@ -182,7 +181,7 @@ export function ReportOverview({
         {metrics ? (
           <>
             <TabPanel value="now" className="focus:outline-none">
-              <ul aria-label="현재 에너지 지표" className="grid grid-cols-1 gap-[var(--space-4)] sm:grid-cols-3">
+              <ul aria-label="현재 에너지 지표" className="grid grid-cols-1 gap-[var(--space-4)] sm:grid-cols-2">
                 {metricCards.map((metric) => (
                   <li key={metric.label}>
                     <Card className="flex h-full flex-col gap-1.5">
@@ -229,14 +228,6 @@ export function ReportOverview({
                         <strong className="font-bold text-[var(--text-body)]">실제 고지서보다 크게 나옵니다.</strong>{" "}
                         1차에너지는 발전·수송 손실까지 거슬러 올라간 값이고, 요금은 최종 소비 에너지 기준으로
                         부과됩니다.
-                      </span>
-                    </li>
-                    <li className="flex gap-2">
-                      <span aria-hidden className="text-[var(--teal-600)]">·</span>
-                      <span>
-                        <strong className="font-bold text-[var(--text-body)]">개선 여력은 이론적 최대입니다.</strong>{" "}
-                        최고 등급(1+++) 수준까지 낮췄을 때를 가정한 값이라, 실제로 실천 가능한 절감액은 아래
-                        「권장 조치」 쪽 숫자를 보세요.
                       </span>
                     </li>
                   </ul>
