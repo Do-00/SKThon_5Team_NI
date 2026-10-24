@@ -1,6 +1,6 @@
 import { GRADE_ORDER, GRADES, PRIMARY_ENERGY_UNIT, type GradeCode } from "../data/grades";
 import type { BuildingRawSource } from "../data/buildings";
-import { EXAMPLE_ENERGY_COST, getExampleEnergyCost } from "../data/energy-cost";
+import { getExampleEnergyCost } from "../data/energy-cost";
 import { HEATING_TYPE_OPTIONS, type ApartmentChecklistAnswers } from "./apartment-checklist";
 import type { EnergyMetrics } from "./eco-api";
 import { formatNumber } from "./format";
@@ -232,12 +232,10 @@ export function buildRemodelReportPrompt(input: RemodelReportInput, reference: R
     "- projectedGrade는 1+++, 1++, 1+, 1, 2, 3, 4, 5, 6, 7 중 하나이며 현재 등급보다 나빠질 수 없습니다.",
     ...(unknown
       ? [
-          "- 이 건물은 현재 1차에너지소요량이 없습니다. 먼저 [건물 데이터]의 준공연도·적용 단열기준·난방방식·세대수·연면적·동수·복도유형과",
-          "  [사용자 입력 정보]를 하나씩 충분히 따져 보고, 같은 시기·같은 난방방식 서울 아파트라면 어느 정도일지 추론해",
-          `  estimatedCurrentPrimaryEnergyKwh에 ${AI_ESTIMATE_MIN_KWH}~${AI_ESTIMATE_MAX_KWH} 사이의 숫자로 적습니다.`,
-          "- 그 값에 [참고 계산값]의 감소율을 적용해 projectedPrimaryEnergyKwh를 정하고, [등급 기준표]로 현재·개선 후 등급을,",
-          "  [등급별 연간 난방비 예시]의 현재 등급 금액 × 감소율로 annualSavingsManwon을 정합니다.",
-          "- 보고서 앞부분에서 현재 소요량은 인증 자료가 없어 건물 정보로 추정한 값이라는 점을 한 번 밝힙니다.",
+          "- 이 건물은 현재 1차에너지소요량·등급·난방비를 확인할 수 없습니다. 이 값들을 추측하거나 지어내지 마세요.",
+          "- estimatedCurrentPrimaryEnergyKwh, projectedPrimaryEnergyKwh, projectedGrade, annualSavingsManwon은 모두 null로 둡니다.",
+          "- 보고서에는 현재 등급, 개선 후 등급, 1차에너지소요량 수치, 금액(만원)을 쓰지 않고 감소율(%)과 항목별 절감률만 인용합니다.",
+          "- 보고서 앞부분에서 현재 상태를 확인할 자료가 없어 절대값 대신 감소율만 안내한다는 점을 한 번 밝힙니다.",
         ]
       : [
           "- estimatedCurrentPrimaryEnergyKwh는 null로 둡니다.",
@@ -252,9 +250,7 @@ export function buildRemodelReportPrompt(input: RemodelReportInput, reference: R
     currentValueLine(reference),
     reference.annualEnergyCostManwon !== null
       ? `- 연간 난방비(고정비): 약 ${reference.annualEnergyCostManwon}만원`
-      : unknown
-        ? "- 연간 난방비: 추정한 현재 등급으로 [등급별 연간 난방비 예시]에서 찾습니다."
-        : "- 연간 난방비: 정보 없음 (금액을 언급하지 마세요)",
+      : "- 연간 난방비: 정보 없음 (금액을 언급하지 마세요)",
     "",
     "[추천 리모델링 6가지 — 항목별 1차에너지 절감률]",
     ...REMODEL_MEASURES.map((measure) => `- ${measure.title}: ${measure.reductionPct}% (${measure.source})`),
@@ -265,19 +261,6 @@ export function buildRemodelReportPrompt(input: RemodelReportInput, reference: R
       ? `- 개선 후 1차에너지소요량: ${reference.projectedPrimaryEnergyKwh} ${PRIMARY_ENERGY_UNIT}, 예상 등급 ${GRADES[reference.projectedGrade].label}`
       : null,
     reference.annualSavingsManwon !== null ? `- 연간 절감 고정비: 약 ${reference.annualSavingsManwon}만원` : null,
-    ...(unknown
-      ? [
-          "",
-          `[등급 기준표 — 1차에너지소요량(${PRIMARY_ENERGY_UNIT})]`,
-          ...GRADE_ORDER.map((code) => {
-            const { label, minPrimaryEnergyKwh: min, maxPrimaryEnergyKwh: max } = GRADES[code];
-            return `- ${label}: ${min} 이상${max === null ? "" : ` ${max} 미만`}`;
-          }),
-          "",
-          "[등급별 연간 난방비 예시(만원)]",
-          ...GRADE_ORDER.map((code) => `- ${GRADES[code].label}: ${EXAMPLE_ENERGY_COST[code]?.annualEnergyCostManwon}`),
-        ]
-      : []),
     "",
     "[사용자 입력 정보]",
     ...checklistLines(input.checklist),
@@ -347,16 +330,8 @@ export function acceptGeminiRemodelReport(raw: unknown, reference: RemodelRefere
     .map((line) => (/[.!?。]$/.test(line) ? line : `${line}.`));
   if (lines.length < REPORT_MIN_LINES) return { reason: `보고서 ${lines.length}줄 (최소 ${REPORT_MIN_LINES}줄)` };
 
-  let ref = reference;
-  if (reference.currentBasis === "unknown") {
-    const estimated = Number(data.estimatedCurrentPrimaryEnergyKwh);
-    if (!Number.isFinite(estimated) || estimated < AI_ESTIMATE_MIN_KWH || estimated > AI_ESTIMATE_MAX_KWH) {
-      return {
-        reason: `현재 소요량 추정 ${data.estimatedCurrentPrimaryEnergyKwh} (${AI_ESTIMATE_MIN_KWH}~${AI_ESTIMATE_MAX_KWH} 범위 밖)`,
-      };
-    }
-    ref = computeLocalReference(aiCurrentState(round1(estimated)));
-  }
+  // 현재 소요량을 확인할 수 없는 건물은 AI가 값을 추정하지 않는다. 감소율만 검증하고 등급·소요량·금액은 null.
+  const ref = reference;
 
   const reductionPercent = Number(data.reductionPercent);
   if (!Number.isFinite(reductionPercent) || !isWithin(reductionPercent, ref.reductionPercent, 0.2)) {
