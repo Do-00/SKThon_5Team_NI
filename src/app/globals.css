@@ -1,0 +1,394 @@
+@import "tailwindcss";
+
+:root {
+  /* Brand */
+  --eco-teal: #2f847c;
+  --eco-celadon: #ace1af;
+  --eco-vanilla: #eee8aa;
+  --eco-peach: #e2725b;
+  --eco-brick: #cc4e5c;
+
+  /* Primary ramp */
+  --teal-900: #12332f;
+  --teal-800: #1b4a45;
+  --teal-700: #23635c;
+  --teal-600: #2f847c;
+  --teal-500: #3d9c93;
+  --teal-300: #8ec8c2;
+  --teal-100: #d5eae7;
+  --teal-50: #eef7f6;
+
+  /* Supporting ramps */
+  --celadon-700: #4f8f56;
+  --celadon-600: #68a96f;
+  --celadon-400: #ace1af;
+  --celadon-100: #e2f4e3;
+  --vanilla-700: #8a7c1f;
+  --vanilla-500: #d8cd63;
+  --vanilla-400: #eee8aa;
+  --vanilla-100: #faf7e2;
+  --peach-700: #b04a34;
+  --peach-500: #e2725b;
+  --peach-100: #fbe6e0;
+  --brick-700: #9c2f3c;
+  --brick-600: #cc4e5c;
+  --brick-100: #f8e2e4;
+
+  /* Teal-biased neutrals */
+  --ink-900: #14201e;
+  --ink-700: #33413e;
+  --ink-500: #5d6b68;
+  --ink-400: #7f8c89;
+  --ink-300: #c2cbc9;
+  --ink-200: #e0e6e4;
+  --ink-100: #eef1f0;
+  --paper: #ffffff;
+  --paper-warm: #f7f9f8;
+
+  /* Semantic color */
+  --background: var(--paper-warm);
+  --foreground: var(--ink-900);
+  --text-strong: var(--ink-900);
+  --text-body: var(--ink-700);
+  --text-muted: var(--ink-500);
+  --text-on-primary: #ffffff;
+  --text-link: var(--teal-700);
+  --surface-page: var(--paper-warm);
+  --surface-card: var(--paper);
+  --surface-sunken: var(--ink-100);
+  --surface-brand: var(--teal-600);
+  --surface-brand-soft: var(--teal-50);
+  --surface-accent-soft: var(--celadon-100);
+  --border-subtle: var(--ink-200);
+  --border-strong: var(--ink-300);
+  --border-brand: var(--teal-600);
+  --focus-ring: var(--teal-500);
+  --action-primary: var(--teal-600);
+  --action-primary-hover: var(--teal-700);
+  --action-primary-press: var(--teal-800);
+  --action-disabled: var(--ink-200);
+  --status-good: var(--celadon-700);
+  --status-good-soft: var(--celadon-100);
+  --status-caution: var(--vanilla-700);
+  --status-caution-soft: var(--vanilla-100);
+  --status-warn: var(--peach-700);
+  --status-warn-soft: var(--peach-100);
+  --status-danger: var(--brick-700);
+  --status-danger-soft: var(--brick-100);
+
+  /* Energy grade scale: 1+++ through 7 */
+  --grade-1p3: #1b4a45;
+  --grade-1p3-soft: #d5eae7;
+  --grade-1p2: #23635c;
+  --grade-1p2-soft: #d5eae7;
+  --grade-1p1: #2f847c;
+  --grade-1p1-soft: #d5eae7;
+  --grade-1: #3d9c93;
+  --grade-1-soft: #e3f1ef;
+  --grade-2: #68a96f;
+  --grade-2-soft: #e2f4e3;
+  --grade-3: #8fa93f;
+  --grade-3-soft: #eef3dc;
+  --grade-4: #a8951f;
+  --grade-4-soft: #faf7e2;
+  --grade-5: #c5822f;
+  --grade-5-soft: #fbf0df;
+  --grade-6: #d1603f;
+  --grade-6-soft: #fbe6e0;
+  --grade-7: #cc4e5c;
+  --grade-7-soft: #f8e2e4;
+
+  /* Typography */
+  /*
+   * A2Z 디스플레이 서체는 디자인 시스템에서 추출한 원본 바이너리가 잘려 있어
+   * (두 TTF 모두 196,608바이트에서 절단, sfnt 테이블이 파일 범위를 벗어남)
+   * next/font/local 로딩이 불가능하다. 완전한 A2Z 파일을 확보하면
+   * `--font-a2z` 변수를 이 스택 맨 앞에 복원할 것. 그 전까지는 Noto Sans KR의
+   * 굵은 웨이트(700/900)를 디스플레이 서체로 대체 사용한다.
+   */
+  --font-display: var(--font-noto-sans-kr, "Noto Sans KR"), "Noto Sans KR", system-ui, sans-serif;
+  --font-body: var(--font-noto-sans-kr), "Noto Sans KR", "Pretendard", system-ui, -apple-system, BlinkMacSystemFont, sans-serif;
+  --font-utility: "SFMono-Regular", Menlo, Consolas, monospace;
+  --text-display-size: 44px;
+  --text-display-lh: 1.18;
+  --text-display-weight: 900;
+  --text-title-size: 32px;
+  --text-title-lh: 1.25;
+  --text-title-weight: 900;
+  --text-heading-size: 24px;
+  --text-heading-lh: 1.35;
+  --text-heading-weight: 700;
+  --text-subhead-size: 20px;
+  --text-subhead-lh: 1.4;
+  --text-subhead-weight: 700;
+  --text-body-lg-size: 19px;
+  --text-body-lg-lh: 1.6;
+  --text-body-size: 17px;
+  --text-body-lh: 1.65;
+  --text-label-size: 16px;
+  --text-label-lh: 1.4;
+  --text-caption-size: 15px;
+  --text-caption-lh: 1.45;
+  --text-numeral-size: 56px;
+  --text-numeral-lh: 1;
+  --weight-regular: 400;
+  --weight-medium: 500;
+  --weight-bold: 700;
+  --weight-black: 900;
+  --tracking-tight: -0.02em;
+  --tracking-normal: -0.01em;
+  --tracking-wide: 0.02em;
+
+  /* Layout and spacing */
+  --space-1: 4px;
+  --space-2: 8px;
+  --space-3: 12px;
+  --space-4: 16px;
+  --space-5: 20px;
+  --space-6: 24px;
+  --space-8: 32px;
+  --space-10: 40px;
+  --space-12: 48px;
+  --space-16: 64px;
+  --space-20: 80px;
+  --gutter-screen: 24px;
+  --gap-card: 16px;
+  --pad-card: 20px;
+  --pad-section: 24px;
+  --hit-min: 56px;
+  --hit-comfortable: 64px;
+  --width-app: 390px;
+  --width-reading: 720px;
+  --width-content: 1120px;
+  --app-bar-height: 84px;
+
+  /* Shape, borders, and elevation */
+  --radius-sm: 8px;
+  --radius-md: 14px;
+  --radius-lg: 20px;
+  --radius-xl: 28px;
+  --radius-pill: 999px;
+  --border-width: 1px;
+  --border-width-strong: 2px;
+  --shadow-card: 0 1px 2px rgb(20 32 30 / 5%), 0 6px 20px rgb(20 32 30 / 7%);
+  --shadow-raised: 0 2px 4px rgb(20 32 30 / 6%), 0 12px 32px rgb(20 32 30 / 10%);
+  --shadow-sheet: 0 -6px 32px rgb(20 32 30 / 14%);
+  --shadow-overlay: 0 24px 72px rgb(20 32 30 / 24%);
+  --ring-focus: 0 0 0 3px rgb(61 156 147 / 45%);
+  --ease-standard: cubic-bezier(0.2, 0.7, 0.3, 1);
+  --ease-exit: cubic-bezier(0.4, 0, 1, 1);
+  --dur-fast: 120ms;
+  --dur-base: 180ms;
+  --dur-slow: 280ms;
+}
+
+@theme inline {
+  --color-background: var(--background);
+  --color-foreground: var(--foreground);
+  --color-eco-teal: var(--eco-teal);
+  --color-eco-celadon: var(--eco-celadon);
+  --color-eco-vanilla: var(--eco-vanilla);
+  --color-eco-peach: var(--eco-peach);
+  --color-eco-brick: var(--eco-brick);
+  --color-teal-50: var(--teal-50);
+  --color-teal-100: var(--teal-100);
+  --color-teal-300: var(--teal-300);
+  --color-teal-500: var(--teal-500);
+  --color-teal-600: var(--teal-600);
+  --color-teal-700: var(--teal-700);
+  --color-teal-800: var(--teal-800);
+  --color-teal-900: var(--teal-900);
+  --color-celadon-100: var(--celadon-100);
+  --color-celadon-400: var(--celadon-400);
+  --color-celadon-600: var(--celadon-600);
+  --color-celadon-700: var(--celadon-700);
+  --color-vanilla-100: var(--vanilla-100);
+  --color-vanilla-400: var(--vanilla-400);
+  --color-vanilla-500: var(--vanilla-500);
+  --color-vanilla-700: var(--vanilla-700);
+  --color-peach-100: var(--peach-100);
+  --color-peach-500: var(--peach-500);
+  --color-peach-700: var(--peach-700);
+  --color-brick-100: var(--brick-100);
+  --color-brick-600: var(--brick-600);
+  --color-brick-700: var(--brick-700);
+  --color-ink-100: var(--ink-100);
+  --color-ink-200: var(--ink-200);
+  --color-ink-300: var(--ink-300);
+  --color-ink-400: var(--ink-400);
+  --color-ink-500: var(--ink-500);
+  --color-ink-700: var(--ink-700);
+  --color-ink-900: var(--ink-900);
+  --color-paper: var(--paper);
+  --color-paper-warm: var(--paper-warm);
+  --font-sans: var(--font-body);
+  --font-mono: var(--font-utility);
+  --font-brand: var(--font-display);
+}
+
+*,
+*::before,
+*::after {
+  box-sizing: border-box;
+}
+
+html {
+  min-width: 320px;
+  min-height: 100%;
+  scroll-behavior: smooth;
+  background: var(--surface-page);
+}
+
+body {
+  min-height: 100%;
+  overflow-x: hidden;
+  background: var(--surface-page);
+  color: var(--text-body);
+  font-family: var(--font-body);
+  font-size: var(--text-body-size);
+  line-height: var(--text-body-lh);
+  letter-spacing: var(--tracking-normal);
+  text-rendering: optimizeLegibility;
+}
+
+::selection {
+  background: var(--teal-100);
+  color: var(--teal-900);
+}
+
+button,
+input,
+select,
+textarea {
+  color: inherit;
+  font: inherit;
+}
+
+button,
+a,
+input,
+select,
+textarea,
+[tabindex]:not([tabindex="-1"]) {
+  -webkit-tap-highlight-color: transparent;
+}
+
+:where(a, button, input, select, textarea, summary, [tabindex]):focus-visible {
+  outline: 2px solid var(--focus-ring);
+  outline-offset: 3px;
+  box-shadow: var(--ring-focus);
+}
+
+a {
+  text-decoration-thickness: 0.08em;
+  text-underline-offset: 0.2em;
+}
+
+img,
+svg {
+  max-width: 100%;
+}
+
+/*
+ * Layered so Tailwind utilities (which live in `@layer utilities`) can
+ * override heading color/font — unlayered rules would beat any utility.
+ */
+@layer base {
+  h1,
+  h2,
+  h3,
+  h4 {
+    color: var(--text-strong);
+    font-family: var(--font-display);
+    letter-spacing: var(--tracking-tight);
+    text-wrap: balance;
+  }
+}
+
+p {
+  text-wrap: pretty;
+}
+
+.eco-container {
+  width: min(100%, calc(var(--width-content) + (var(--gutter-screen) * 2)));
+  margin-inline: auto;
+  padding-inline: var(--gutter-screen);
+}
+
+.eco-reading-width {
+  max-width: var(--width-reading);
+}
+
+.eco-display {
+  font-family: var(--font-display);
+  font-size: clamp(2.25rem, 4vw, var(--text-display-size));
+  font-weight: var(--text-display-weight);
+  line-height: var(--text-display-lh);
+  letter-spacing: var(--tracking-tight);
+}
+
+.eco-title {
+  font-family: var(--font-display);
+  font-size: clamp(1.75rem, 3vw, var(--text-title-size));
+  font-weight: var(--text-title-weight);
+  line-height: var(--text-title-lh);
+  letter-spacing: var(--tracking-tight);
+}
+
+.eco-heading {
+  font-family: var(--font-display);
+  font-size: var(--text-heading-size);
+  font-weight: var(--text-heading-weight);
+  line-height: var(--text-heading-lh);
+  letter-spacing: var(--tracking-tight);
+}
+
+.eco-subhead {
+  font-family: var(--font-display);
+  font-size: var(--text-subhead-size);
+  font-weight: var(--text-subhead-weight);
+  line-height: var(--text-subhead-lh);
+}
+
+.eco-numeral {
+  font-family: var(--font-display);
+  font-size: clamp(2.75rem, 6vw, var(--text-numeral-size));
+  font-variant-numeric: tabular-nums;
+  font-weight: var(--weight-black);
+  letter-spacing: var(--tracking-tight);
+  line-height: var(--text-numeral-lh);
+}
+
+.sr-only {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  margin: -1px;
+  overflow: hidden;
+  clip: rect(0, 0, 0, 0);
+  white-space: nowrap;
+  border: 0;
+}
+
+@media (max-width: 640px) {
+  :root {
+    --gutter-screen: 20px;
+    --app-bar-height: 64px;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  html {
+    scroll-behavior: auto;
+  }
+
+  *,
+  *::before,
+  *::after {
+    scroll-behavior: auto !important;
+    transition-duration: 0.01ms !important;
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+  }
+}

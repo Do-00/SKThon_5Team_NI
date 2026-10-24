@@ -1,0 +1,96 @@
+### beec API — 서울 아파트 에너지 등급 추정
+### IntelliJ 에서 각 요청 왼쪽 ▶ 를 눌러 실행합니다.
+###
+### 이 서비스는 서울 아파트(공동주택)만 다룹니다.
+### 단독주택·빌라·비주거용은 인증 실적도 공개 사용량도 없어 추정할 근거가 없습니다.
+
+@host = http://localhost:8080
+
+
+### ═══════════════════════════════════════════════════════════
+### 1. 현재 파이프라인 — /api/apt/*
+### ═══════════════════════════════════════════════════════════
+
+### 전체 현황 — 서울 아파트 2,888개 중 인증 사각지대 규모
+### 발표 첫 장에 쓰는 숫자입니다. byInsulationEra 가 시기별 인증 비율.
+GET {{host}}/api/apt/stats
+
+
+### 모델 성능 — 교차검증 결과와 시기별 추정 허용 범위
+### MAE / R² / gate(point·range·refuse) 를 그대로 공개합니다.
+### "그 숫자 어디서 나왔냐" 는 질문에 이 URL 로 답합니다.
+GET {{host}}/api/apt/model
+
+
+### 단지 검색 — 이름·동·구·주소 부분일치, 관련도 순
+GET {{host}}/api/apt/search?q=상계
+
+### 더 많이 (limit 최대 500)
+GET {{host}}/api/apt/search?q=노원구&limit=300
+
+
+### ── 단지 상세: 응답이 네 갈래로 나뉩니다 ──────────────────────
+
+### ① 인증 있음 → measured 에 실제 인증값, estimate 는 null
+GET {{host}}/api/apt/A13402202
+### 천호e-편한세상 (강동구, 2005년)
+
+### ② 추정 확정(point) → estimate.grade + marginOfError
+GET {{host}}/api/apt/A13991016
+### 월계동원베네스트 (노원구, 2005년)
+
+### ③ 범위만(range) → grade 는 null, gradeBest~gradeWorst 만
+GET {{host}}/api/apt/A13876112
+### 송파파인타운13단지 (2011년)
+
+### ④ 추정 거부(refuse) → estimate 가 null, 대신 whatWeCanSay
+### 데모의 핵심입니다. 근거가 없으면 등급을 매기지 않습니다.
+GET {{host}}/api/apt/A13920102
+### 상계수락현대 (노원구, 1995년, 1987년 단열기준)
+
+
+### ═══════════════════════════════════════════════════════════
+### 2. 실사용량 — 국토교통부 건물에너지정보
+### ═══════════════════════════════════════════════════════════
+### 인증이 없어도 실제로 쓴 전기·가스는 공개됩니다.
+### 추정을 거부한 단지에게 해줄 수 있는 유일한 실측 이야기입니다.
+###
+### application.properties 에 아래 두 개가 있어야 동작합니다.
+###   kakao.rest.key=...        (주소 → 법정동코드)
+###   datagokr.service.key=...  (공공데이터포털 일반 인증키)
+
+### 진단 — 어떤 오퍼레이션 조합이 실제로 응답하는지 찾습니다
+GET {{host}}/api/usage/probe?address=서울 노원구 상계동 680
+
+### 본 조회 — 최근 12개월 전기·가스 + 난방비 환산
+GET {{host}}/api/usage?address=서울 노원구 상계동 680&months=12
+
+
+### ═══════════════════════════════════════════════════════════
+### 3. 기존 엔드포인트 — 현재 화면이 쓰고 있습니다
+### ═══════════════════════════════════════════════════════════
+### 지우면 프론트가 깨집니다. /api/apt/* 로 옮겨가기 전까지 유지합니다.
+
+### 주소 실측 매칭. 아파트가 아니면 outOfScope:true 로 돌아옵니다.
+GET {{host}}/api/match?jibunAddress=서울 강서구 화곡동 23-191
+
+### 용도·지역·규모 기반 추정 (purpose 는 받되 주거용으로 고정)
+GET {{host}}/api/report?region=서울&sizeBucket=medium
+
+### 보정 입력 반영 — 준공연도/난방방식/창호상태 + 신뢰도
+GET {{host}}/api/report?region=서울&sizeBucket=medium&completionYear=1995&heatingType=개별난방&windowState=노후 단창
+
+### 동네 비교 지도 — 전국 252개 (아파트 인증이 없는 동네는 회색)
+GET {{host}}/api/districts
+
+### 한 동네만
+GET {{host}}/api/district?name=서울 노원구
+
+### What-if 시뮬레이터 — 개선 조치를 곱셈으로 적용
+GET {{host}}/api/simulate?baseEnergy=180&measures=WIN,WAL&purpose=주거용
+
+### 사용자 유형별 우선순위 (owner / tenant / hoa / corporation / general)
+GET {{host}}/api/actions?userType=tenant&baseEnergy=180
+
+### 개선 조치 목록
+GET {{host}}/api/measures

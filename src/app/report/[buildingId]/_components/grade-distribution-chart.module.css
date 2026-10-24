@@ -1,0 +1,344 @@
+.figure {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-4);
+  margin: 0;
+  padding: clamp(var(--space-5), 4vw, var(--space-8));
+  overflow: hidden;
+  border: var(--border-width) solid var(--border-subtle);
+  border-radius: var(--radius-lg);
+  background: var(--surface-card);
+  box-shadow: var(--shadow-card);
+}
+
+.headingRow {
+  display: flex;
+  align-items: end;
+  justify-content: space-between;
+  gap: var(--space-4);
+}
+
+.eyebrow {
+  margin: 0 0 var(--space-1);
+  color: var(--text-link);
+  font-size: var(--text-caption-size);
+  font-weight: var(--weight-bold);
+}
+
+.scope,
+.description {
+  margin: 0;
+  color: var(--text-muted);
+  font-size: var(--text-caption-size);
+}
+
+.scope {
+  flex: 0 0 auto;
+  font-variant-numeric: tabular-nums;
+}
+
+.description {
+  max-width: 70ch;
+}
+
+.scroller {
+  max-width: 100%;
+  overflow-x: auto;
+  overscroll-behavior-inline: contain;
+  scrollbar-gutter: stable;
+}
+
+.scroller:focus-visible {
+  border-radius: var(--radius-sm);
+}
+
+.chartShell {
+  min-width: 680px;
+  padding-top: var(--space-8);
+}
+
+.plot {
+  position: relative;
+  height: 270px;
+  padding-left: 52px;
+}
+
+.axis {
+  position: absolute;
+  inset: 0 auto 36px 0;
+  display: flex;
+  width: 44px;
+  flex-direction: column;
+  justify-content: space-between;
+  color: var(--text-muted);
+  font-family: var(--font-utility);
+  font-size: 12px;
+  font-variant-numeric: tabular-nums;
+  line-height: 1;
+  text-align: right;
+}
+
+.gridLines {
+  position: absolute;
+  inset: 0 0 36px 52px;
+  display: flex;
+  flex-direction: column;
+  justify-content: space-between;
+  pointer-events: none;
+}
+
+.gridLines span {
+  display: block;
+  border-top: var(--border-width) solid var(--border-subtle);
+}
+
+.bars,
+.hitTargets {
+  position: absolute;
+  inset: 0 0 0 52px;
+  display: grid;
+  grid-template-columns: repeat(10, minmax(44px, 1fr));
+  gap: var(--space-2);
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.bars li {
+  position: relative;
+  display: grid;
+  min-width: 0;
+  grid-template-rows: 24px 1fr 36px;
+  align-items: end;
+  justify-items: stretch;
+}
+
+.valueLabel,
+.gradeLabel {
+  position: relative;
+  z-index: 2;
+  overflow: visible;
+  color: var(--text-muted);
+  font-family: var(--font-utility);
+  font-size: 12px;
+  font-variant-numeric: tabular-nums;
+  line-height: 1;
+  text-align: center;
+  white-space: nowrap;
+}
+
+.valueLabel {
+  align-self: center;
+}
+
+.gradeLabel {
+  align-self: end;
+  padding-top: var(--space-3);
+  color: var(--text-body);
+  font-family: var(--font-body);
+  font-size: var(--text-caption-size);
+  font-weight: var(--weight-bold);
+}
+
+.bar {
+  align-self: end;
+  width: min(34px, 70%);
+  height: var(--bar-height);
+  min-height: 2px;
+  justify-self: center;
+  border-radius: 4px 4px 0 0;
+  background: var(--teal-300);
+  box-shadow: inset 0 0 0 1px rgb(18 51 47 / 8%);
+}
+
+.currentColumn::before {
+  position: absolute;
+  inset: 18px 0 36px;
+  border-radius: var(--radius-sm);
+  background: var(--vanilla-100);
+  content: "";
+}
+
+.currentColumn .valueLabel,
+.currentColumn .gradeLabel {
+  color: var(--text-strong);
+  font-weight: var(--weight-black);
+}
+
+.currentMarker {
+  position: relative;
+  align-self: end;
+  width: min(34px, 70%);
+  height: 14px;
+  justify-self: center;
+  border: 3px solid var(--paper);
+  border-radius: var(--radius-pill) var(--radius-pill) 2px 2px;
+  background: var(--current-grade-color);
+  box-shadow: 0 0 0 2px var(--current-grade-color);
+}
+
+.hitTargets {
+  z-index: 3;
+}
+
+.hitTargets li {
+  position: relative;
+  min-width: 0;
+}
+
+.hitTarget {
+  width: 100%;
+  height: calc(100% - 28px);
+  margin-top: 8px;
+  cursor: help;
+  border: 0;
+  border-radius: var(--radius-sm);
+  background: transparent;
+}
+
+.tooltip {
+  position: absolute;
+  z-index: 6;
+  bottom: calc(100% - 18px);
+  left: 50%;
+  display: none;
+  width: max-content;
+  max-width: 190px;
+  transform: translateX(-50%);
+  flex-direction: column;
+  gap: 2px;
+  padding: var(--space-2) var(--space-3);
+  border-radius: var(--radius-sm);
+  background: var(--teal-900);
+  color: var(--text-on-primary);
+  font-size: 13px;
+  line-height: 1.4;
+  text-align: left;
+  box-shadow: var(--shadow-raised);
+  pointer-events: none;
+}
+
+.hitTargets li:first-child .tooltip {
+  left: 0;
+  transform: none;
+}
+
+.hitTargets li:last-child .tooltip {
+  right: 0;
+  left: auto;
+  transform: none;
+}
+
+.hitTarget:hover .tooltip,
+.hitTarget:focus-visible .tooltip {
+  display: flex;
+}
+
+.legend {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-3) var(--space-6);
+  color: var(--text-muted);
+  font-size: var(--text-caption-size);
+}
+
+.legend span {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-2);
+}
+
+.peerKey,
+.currentKey {
+  display: inline-block;
+  width: 18px;
+  height: 10px;
+  border-radius: 3px;
+}
+
+.peerKey {
+  background: var(--teal-300);
+}
+
+.currentKey {
+  border: 2px solid var(--paper);
+  background: var(--current-grade-color);
+  box-shadow: 0 0 0 1px var(--current-grade-color);
+}
+
+.tableDetails {
+  border-top: var(--border-width) solid var(--border-subtle);
+  padding-top: var(--space-3);
+}
+
+.tableDetails summary {
+  width: fit-content;
+  cursor: pointer;
+  color: var(--text-link);
+  font-size: var(--text-caption-size);
+  font-weight: var(--weight-bold);
+}
+
+.tableScroller {
+  max-width: 100%;
+  margin-top: var(--space-3);
+  overflow-x: auto;
+}
+
+.tableScroller table {
+  width: 100%;
+  min-width: 560px;
+  border-collapse: collapse;
+  font-size: var(--text-caption-size);
+}
+
+.tableScroller th,
+.tableScroller td {
+  padding: var(--space-2) var(--space-3);
+  border-bottom: var(--border-width) solid var(--border-subtle);
+  text-align: left;
+}
+
+.tableScroller thead th {
+  background: var(--surface-sunken);
+  color: var(--text-strong);
+}
+
+.tableScroller tbody th {
+  color: var(--text-strong);
+}
+
+.tableScroller td {
+  color: var(--text-body);
+  font-variant-numeric: tabular-nums;
+}
+
+@media (max-width: 640px) {
+  .headingRow {
+    align-items: start;
+    flex-direction: column;
+    gap: var(--space-2);
+  }
+
+  .chartShell {
+    min-width: 640px;
+  }
+}
+
+@media (forced-colors: active) {
+  .bar {
+    border: 1px solid CanvasText;
+    background: Canvas;
+  }
+
+  .currentColumn::before {
+    border: 2px dashed Highlight;
+    background: Canvas;
+  }
+
+  .currentMarker {
+    border-color: HighlightText;
+    background: Highlight;
+    box-shadow: 0 0 0 2px Highlight;
+  }
+}

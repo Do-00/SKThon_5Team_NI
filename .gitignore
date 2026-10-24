@@ -1,0 +1,65 @@
+# dependencies
+node_modules/
+.pnp
+.pnp.*
+.yarn/*
+!.yarn/patches
+!.yarn/plugins
+!.yarn/releases
+!.yarn/versions
+
+# next.js
+.next/
+out/
+
+# production
+build/
+
+# testing
+coverage/
+
+# debug / logs
+*.log
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+.pnpm-debug.log*
+
+# env files (예시 파일은 커밋)
+.env
+.env*
+!.env.example
+
+# vercel
+.vercel
+
+# typescript
+*.tsbuildinfo
+
+# certificates
+*.pem
+
+# python
+__pycache__/
+
+# OS
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# IDE / editor
+.idea/
+.vscode/
+
+# Claude Code 로컬 설정·작업 트리
+.claude/settings.local.json
+.claude/worktrees/
+next-env.d.ts
+
+# 법령 API 응답 확인용 임시 파일
+law-probe/
+
+Claude outputs/
+
+# 건물에너지 API 원본 응답 (scripts/fetch-gas-2025.mjs)
+data-raw/
