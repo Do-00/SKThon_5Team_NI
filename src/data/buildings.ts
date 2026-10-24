@@ -1,4 +1,16 @@
 import { CURRENT_BUILDING_GRADE, GRADE_ORDER, type GradeCode } from "./grades";
+import { decodeBuildingId, encodeBuildingId, GENERAL_BUILDING_PREFIX } from "../lib/building-id";
+import {
+  factsWeCanSay,
+  findBuildings,
+  judgeGrade,
+  pickBuilding,
+  sidoKeys,
+  type BuildingFacts,
+  type ElectricUsage,
+  type GasUsage,
+  type PeerJudgement,
+} from "../lib/building-registry";
 import { decodeAddressId, decodeEstimateId, encodeAddressId, encodeEstimateId, type EstimateIdParts } from "../lib/address-id";
 import {
   estimateReport,
@@ -64,6 +76,8 @@ export interface BuildingSummary {
   estimate?: BuildingEstimateInfo;
   /** Set for an `/api/apt/{aptCode}` match (`apt-…` ids) — richer facts/measured/estimate than `/api/match` gives. */
   apartment?: ApartmentReportInfo;
+  /** 전체 건축물(`bld-…` ids) — 건축물대장 표제부와 전국 인증현황 비교로 만든 성적표. */
+  general?: GeneralBuildingInfo;
   /**
    * beec's response exactly as it came back, for every beec-backed building
    * (absent on fixtures). The report's "추정 근거" card shows it unprocessed,
@@ -106,6 +120,20 @@ export interface BuildingEstimateInfo {
   lowSample: boolean;
 }
 
+/** 전체 건축물 성적표의 건물 정보와 등급 판단 (`bld-…` ids). */
+export interface GeneralBuildingInfo {
+  facts: BuildingFacts;
+  judgement: PeerJudgement;
+  /** 등급을 말하지 않을 때 대신 보여 줄 확인된 사실. */
+  whatWeCanSay: string[];
+  /** 같은 필지의 다른 주건축물 — 성적표에서 고를 수 있게. */
+  siblings: { id: string; label: string }[];
+  /** 주소의 시·도 (지원사업 지역 필터용). */
+  sido: string | null;
+  gas: GasUsage | null;
+  electric: ElectricUsage | null;
+}
+
 /** `/api/apt/{aptCode}`'s facts/measured/estimate, for the apartment API's report card (`apt-…` ids). */
 export interface ApartmentReportInfo {
   aptCode: string;
@@ -121,6 +149,8 @@ export interface ApartmentReportInfo {
   disclaimer?: string;
   /** `"± N kWh/m²·yr"` for a point estimate. */
   marginOfError?: number;
+  /** 추정을 거절했을 때(`source: "unknown"`) 등급 대신 보여 줄, 확인된 사실 문장들. */
+  whatWeCanSay?: string[];
 }
 
 export interface SavedBuilding extends BuildingSummary {
@@ -437,6 +467,7 @@ function toApartmentBuildingSummary(detail: ApartmentDetail): BuildingSummary | 
       source,
       disclaimer,
       marginOfError,
+      whatWeCanSay: source === "unknown" ? (detail.whatWeCanSay?.points ?? []) : undefined,
     },
     rawSource: { kind: "apt", data: detail },
   };
@@ -572,7 +603,70 @@ export async function searchBuildings(
  * persistent `aptCode`, so this one's a direct lookup); an `"est-…"` id
  * re-queries `/api/report` with the 용도·지역·규모 packed inside it.
  */
+/** 건축물대장 표제부 → 성적표. 등급은 인증 → 같은 용도·시기 인증 건물 범위 → 보류 순으로 정한다. */
+async function getGeneralBuilding(id: string): Promise<BuildingSummary | undefined> {
+  const key = decodeBuildingId(id);
+  if (!key) return undefined;
+  const list = await findBuildings(key);
+  const facts = pickBuilding(list, key.pk);
+  if (!facts) return undefined;
+
+  const judgement = judgeGrade(facts);
+  const grade: GradeCode = judgement.gradeWorst ?? "7";
+  const parcelBase = { ...key, pk: undefined };
+  const label = (b: BuildingFacts) =>
+    [b.name, b.dongName].filter(Boolean).join(" ") || `${b.use} · ${Math.round(b.area).toLocaleString("ko-KR")}㎡`;
+
+  return {
+    id: encodeBuildingId({ ...parcelBase, pk: facts.pk }),
+    // 건물명이 없으면 "성산동 3-16 · 제2종근린생활시설" 처럼 동 이름부터 짧게.
+    name: facts.name
+      ? [facts.name, facts.dongName].filter(Boolean).join(" ")
+      : `${facts.jibunAddress.split(" ").slice(2).join(" ")} · ${facts.use}`,
+    address: facts.roadAddress ?? facts.jibunAddress,
+    grade,
+    distanceMeters: 0,
+    gradeSource: judgement.policy === "certified" ? "certified" : "estimated",
+    // 범위면 나쁜 쪽 등급 구간의 가운데값(보수적), 보류면 0 — 0은 화면에서 "계산 보류"로 처리된다.
+    primaryEnergyKwh: judgement.baseEnergy ?? 0,
+    completionYear: facts.year ?? PLACEHOLDER_BUILDING_DETAILS.completionYear,
+    structureType: facts.structure ?? "구조 미상",
+    useType: facts.use,
+    insulationStandard: facts.year ? insulationEraOf(facts.year) : "알 수 없음",
+    areaSqm: Math.round(facts.area) || PLACEHOLDER_BUILDING_DETAILS.areaSqm,
+    heatingType: "확인 필요",
+    certificationHistory: [],
+    general: {
+      facts,
+      judgement,
+      whatWeCanSay: factsWeCanSay(facts),
+      siblings:
+        list.length > 1
+          ? list.map((b) => ({ id: encodeBuildingId({ ...parcelBase, pk: b.pk }), label: label(b) }))
+          : [],
+      sido: sidoKeys(facts.jibunAddress)[0] ?? null,
+      gas: facts.gas,
+      electric: facts.electric,
+    },
+  };
+}
+
+/** 사용승인 연도 → 그 시기에 적용된 단열 기준 (아파트 모델과 같은 구분). */
+function insulationEraOf(year: number): string {
+  if (year < 1980) return "단열기준 이전";
+  if (year < 1987) return "1980년 기준";
+  if (year < 2001) return "1987년 기준";
+  if (year < 2008) return "2001년 기준";
+  if (year < 2013) return "2008년 기준";
+  if (year < 2016) return "2013년 기준";
+  if (year < 2018) return "2016년 기준";
+  return "2018년 이후";
+}
+
 export async function getBuildingById(id: string, buildingName?: string): Promise<BuildingSummary | undefined> {
+  // 픽스처 id("bld-001")도 같은 접두어라, 필지 키로 풀리는 경우만 전체 건축물로 본다.
+  if (id.startsWith(GENERAL_BUILDING_PREFIX) && decodeBuildingId(id)) return getGeneralBuilding(id);
+
   if (id.startsWith(APARTMENT_ID_PREFIX)) {
     try {
       const detail = await getApartmentDetail(id.slice(APARTMENT_ID_PREFIX.length));

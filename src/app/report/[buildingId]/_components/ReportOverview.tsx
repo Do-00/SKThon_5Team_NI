@@ -39,6 +39,13 @@ export interface ReportOverviewProps {
   primaryEnergyKwh: number;
   grade: GradeCode;
   isEstimated: boolean;
+  /**
+   * 신뢰도 게이트가 추정을 거절한 건물. `grade`는 자리만 채운 값이라 화면에 내면 안 된다 —
+   * 등급 대신 회색 「?」 배지를 보여 준다.
+   */
+  gradeUnknown?: boolean;
+  /** 배지 아래 문구를 바꿀 때, 예: "추정 범위 1+~1등급". 없으면 인증/추정 등급. */
+  gradeCaption?: string;
   basisRows: BasisRow[];
   /** Detailed report figures; `null` for buildings without a full report fixture. */
   metrics: ReportMetrics | null;
@@ -64,6 +71,8 @@ export function ReportOverview({
   primaryEnergyKwh,
   grade,
   isEstimated,
+  gradeUnknown = false,
+  gradeCaption,
   basisRows,
   metrics,
 }: ReportOverviewProps) {
@@ -121,11 +130,24 @@ export function ReportOverview({
           <p className="text-[length:var(--text-caption-size)] text-[var(--text-muted)]">{address}</p>
         </div>
 
-        <EnergyGradeBadge
-          grade={displayGrade}
-          size="lg"
-          caption={showingProjection ? "개선 후 예상 등급" : isEstimated ? "추정 등급" : "인증 등급"}
-        />
+        {gradeUnknown && !showingProjection ? (
+          // EnergyGradeBadge size="lg"와 같은 크기의 회색 배지 — 등급을 말하지 않는다는 것 자체가 결과다.
+          <span className="inline-flex shrink-0 flex-col items-center gap-[var(--space-2)]">
+            <span className="flex h-[116px] w-[116px] items-center justify-center rounded-[var(--radius-lg)] border-[3px] border-[var(--ink-300)] bg-[var(--surface-sunken)] font-brand text-[64px] font-black leading-none text-[var(--ink-400)]">
+              <span aria-hidden="true">?</span>
+              <span className="sr-only">등급 추정 보류</span>
+            </span>
+            <span className="whitespace-nowrap text-[length:var(--text-caption-size)] font-medium text-[var(--text-muted)]">
+              추정 보류
+            </span>
+          </span>
+        ) : (
+          <EnergyGradeBadge
+            grade={displayGrade}
+            size="lg"
+            caption={showingProjection ? "개선 후 예상 등급" : (gradeCaption ?? (isEstimated ? "추정 등급" : "인증 등급"))}
+          />
+        )}
 
         {metrics ? (
           <TabList aria-label="성적표 시점 선택" className="w-full">

@@ -55,3 +55,11 @@ desktop.ini
 .claude/settings.local.json
 .claude/worktrees/
 next-env.d.ts
+
+# 법령 API 응답 확인용 임시 파일
+law-probe/
+
+Claude outputs/
+
+# 건물에너지 API 원본 응답 (scripts/fetch-gas-2025.mjs)
+data-raw/

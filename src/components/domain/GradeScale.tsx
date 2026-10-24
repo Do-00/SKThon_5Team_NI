@@ -7,7 +7,8 @@ import { getGradeColorVars } from "./grade-tokens";
 
 export interface GradeScaleProps {
   /** The building's grade — its bar is raised and fully opaque. */
-  value: GradeCode;
+  /** `null` = 등급을 말하지 않는 건물(추정 보류). 척도만 보여 주고 강조하지 않는다. */
+  value: GradeCode | null;
   /** Lets the user tap any grade to see its primary-energy range. */
   selectable?: boolean;
   /** Show the grade code under each bar. Defaults to true. */
@@ -36,11 +37,11 @@ export function GradeScale({ value, selectable = false, showLabels = true, class
     <div className={cn("flex flex-col gap-[var(--space-3)]", className)}>
       <div
         role={selectable ? "group" : "img"}
-        aria-label={`건물 에너지효율등급 척도, 현재 건물은 ${GRADES[value].label}`}
+        aria-label={value ? `건물 에너지효율등급 척도, 현재 건물은 ${GRADES[value].label}` : "건물 에너지효율등급 척도"}
         className="flex items-end gap-1"
       >
         {GRADE_ORDER.map((code) => {
-          const current = code === value;
+          const current = value !== null && code === value;
           const expanded = code === open;
           const { color } = getGradeColorVars(code);
           const content = (

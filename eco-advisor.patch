@@ -1,0 +1,1559 @@
+diff --git a/.gitignore b/.gitignore
+index c3db7f0..74b99dd 100644
+--- a/.gitignore
++++ b/.gitignore
+@@ -55,3 +55,6 @@ desktop.ini
+ .claude/settings.local.json
+ .claude/worktrees/
+ next-env.d.ts
++
++# 법령 API 응답 확인용 임시 파일
++law-probe/
+diff --git a/scripts/fetch-laws.mjs b/scripts/fetch-laws.mjs
+new file mode 100644
+index 0000000..2a625bf
+--- /dev/null
++++ b/scripts/fetch-laws.mjs
+@@ -0,0 +1,310 @@
++// scripts/fetch-laws.mjs
++//
++// 국가법령정보 OPEN API(open.law.go.kr)로 그린리모델링 관련 법령·고시를 받아
++// 조문 단위로 잘라 src/data/law-corpus.json 에 저장한다.
++//
++// 실행: node scripts/fetch-laws.mjs   (저장소 최상위 폴더에서, .env.local 에 LAW_API_OC 필요)
++//
++// 왜 미리 받아 두나:
++//  - 검색형 AI 상담(/api/advisor)이 발표장 네트워크와 API 승인 상태에 상관없이 동작한다.
++//  - 어떤 조문을 근거로 답했는지 저장소만으로 재현된다.
++//  - OC 값은 결과 파일에 쓰지 않는다.
++
++import { readFileSync, writeFileSync, mkdirSync, existsSync } from "node:fs";
++import { pathToFileURL } from "node:url";
++
++const BASE = "https://www.law.go.kr/DRF";
++const OUT_FILE = "src/data/law-corpus.json";
++const DEBUG_DIR = "law-probe";
++/** 한 덩어리가 이보다 길면 나눈다 — 검색 정밀도와 프롬프트 길이를 같이 지키려고. */
++const MAX_CHUNK_CHARS = 1200;
++
++/**
++ * 받을 문서 목록. 검색어로 찾고, `match` 로 정확히 고른다.
++ * 법령(law)은 법령일련번호(MST), 행정규칙(admrul)은 행정규칙일련번호(ID)로 전문을 받는다.
++ */
++export const SOURCES = [
++  { target: "law", query: "녹색건축물 조성 지원법", match: (n) => n === "녹색건축물 조성 지원법" },
++  { target: "law", query: "녹색건축물 조성 지원법", match: (n) => n === "녹색건축물 조성 지원법 시행령" },
++  { target: "law", query: "녹색건축물 조성 지원법", match: (n) => n === "녹색건축물 조성 지원법 시행규칙" },
++  { target: "law", query: "제로에너지건축물 인증", match: (n) => n.includes("제로에너지건축물 인증") },
++  { target: "admrul", query: "건축물의 에너지절약설계기준", match: (n) => n === "건축물의 에너지절약설계기준" },
++  { target: "admrul", query: "제로에너지건축물 인증 기준", match: (n) => n.includes("제로에너지건축물 인증") },
++  { target: "admrul", query: "그린리모델링", match: (n) => n.includes("그린리모델링") },
++];
++
++// ─── 환경변수 ───────────────────────────────────────────────────────────────
++
++function readEnvFile(path) {
++  if (!existsSync(path)) return {};
++  const env = {};
++  for (const raw of readFileSync(path, "utf8").split(/\r?\n/)) {
++    const line = raw.trim();
++    if (!line || line.startsWith("#")) continue;
++    const eq = line.indexOf("=");
++    if (eq === -1) continue;
++    let value = line.slice(eq + 1).trim();
++    if ((value.startsWith('"') && value.endsWith('"')) || (value.startsWith("'") && value.endsWith("'"))) {
++      value = value.slice(1, -1);
++    }
++    env[line.slice(0, eq).trim()] = value;
++  }
++  return env;
++}
++
++// ─── 공통 유틸 ──────────────────────────────────────────────────────────────
++
++/** API는 결과가 1건이면 배열 대신 객체 하나를 준다 — 항상 배열로 맞춘다. */
++const asArray = (v) => (v == null ? [] : Array.isArray(v) ? v : [v]);
++
++/** 목내용처럼 [[...]] 로 오는 값을 문자열 배열로 편다. */
++function flatStrings(v) {
++  if (v == null) return [];
++  if (typeof v === "string") return [v];
++  if (Array.isArray(v)) return v.flatMap(flatStrings);
++  if (typeof v === "object" && typeof v.content === "string") return [v.content];
++  return [];
++}
++
++const clean = (s) => s.replace(/\s+/g, " ").trim();
++
++/** law.go.kr 공개 주소 — 법령명 공백을 빼면 바로 열린다. 인용 링크로 쓴다(OC 없음). */
++export function publicUrl(kind, name, article) {
++  const base = kind === "admrul" ? "행정규칙" : "법령";
++  const path = [base, name.replace(/\s+/g, "")];
++  if (article && kind !== "admrul") path.push(article);
++  return `https://www.law.go.kr/${path.map(encodeURIComponent).join("/")}`;
++}
++
++/** 긴 조문은 문장 경계에서 나눈다. 나뉜 조각도 같은 조문 번호를 가진다. */
++function splitLong(text) {
++  if (text.length <= MAX_CHUNK_CHARS) return [text];
++  const parts = [];
++  let rest = text;
++  while (rest.length > MAX_CHUNK_CHARS) {
++    // 항·호 표시나 마침표 뒤에서 자른다. 못 찾으면 그냥 길이에서 자른다.
++    const window = rest.slice(0, MAX_CHUNK_CHARS);
++    const cut = Math.max(window.lastIndexOf(" ②"), window.lastIndexOf(" ③"), window.lastIndexOf(". "), window.lastIndexOf("다. "));
++    const at = cut > MAX_CHUNK_CHARS * 0.4 ? cut + 1 : MAX_CHUNK_CHARS;
++    parts.push(rest.slice(0, at).trim());
++    rest = rest.slice(at).trim();
++  }
++  if (rest) parts.push(rest);
++  return parts;
++}
++
++// ─── 법령(law) 전문 → 조문 덩어리 ───────────────────────────────────────────
++
++/** 항 → 호 → 목 순서로 본문을 모은다. 항이 `{호:[...]}` 처럼 내용 없이 올 때도 있다. */
++function collectParagraphs(node) {
++  return asArray(node).flatMap((p) => {
++    if (typeof p !== "object" || p === null) return [];
++    return [
++      ...flatStrings(p.항내용),
++      ...flatStrings(p.호내용),
++      ...flatStrings(p.목내용),
++      ...collectParagraphs(p.호),
++      ...collectParagraphs(p.목),
++    ];
++  });
++}
++
++/**
++ * `lawService.do?target=law` JSON 을 조문 덩어리로 편다.
++ * 장(章) 제목(`조문여부: "전문"`)은 덩어리를 만들지 않고 이후 조문의 chapter 로 붙인다.
++ */
++export function flattenLaw(json) {
++  const law = json?.법령;
++  if (!law) return null;
++  const info = law.기본정보 ?? {};
++  const name = info.법령명_한글;
++  const kind = info.법종구분?.content ?? "법령";
++  const effectiveDate = info.시행일자 ?? null;
++  const chunks = [];
++  let chapter = null;
++
++  for (const unit of asArray(law.조문?.조문단위)) {
++    const head = clean(flatStrings(unit.조문내용).join(" "));
++    if (unit.조문여부 !== "조문") {
++      chapter = head.replace(/<[^>]*>/g, "").trim() || chapter;
++      continue;
++    }
++    // 삭제된 조문은 근거로 쓸 수 없다.
++    if (/^제\d+조(의\d+)?\s*삭제/.test(head)) continue;
++
++    const article = `제${unit.조문번호}조${unit.조문가지번호 ? `의${unit.조문가지번호}` : ""}`;
++    const text = clean([head, ...collectParagraphs(unit.항)].join(" "));
++    splitLong(text).forEach((part, i, all) => {
++      chunks.push({
++        id: `${name}|${article}${all.length > 1 ? `#${i + 1}` : ""}`,
++        source: name,
++        kind,
++        article,
++        title: unit.조문제목 ?? null,
++        chapter,
++        effectiveDate,
++        text: part,
++        url: publicUrl("law", name, article),
++      });
++    });
++  }
++  return { name, kind, effectiveDate, chunks };
++}
++
++// ─── 행정규칙(admrul) 전문 → 조문 덩어리 ────────────────────────────────────
++
++/** 이름 그대로의 키를 객체 어디서든 찾는다(응답 껍데기 이름이 문서마다 다를 수 있어서). */
++function findKey(node, key) {
++  const stack = [node];
++  while (stack.length) {
++    const cur = stack.pop();
++    if (!cur || typeof cur !== "object") continue;
++    if (!Array.isArray(cur) && key in cur) return cur[key];
++    stack.push(...Object.values(cur));
++  }
++  return undefined;
++}
++
++/**
++ * 행정규칙은 조문내용이 문자열 배열로 오는 경우가 많다. 줄을 이어 붙이다가
++ * "제N조" 로 시작하는 줄에서 새 덩어리를 연다. "제N장" 은 chapter 로 기억한다.
++ */
++export function flattenAdmrul(json) {
++  const name = findKey(json, "행정규칙명");
++  if (!name) return null;
++  const kind = findKey(json, "행정규칙종류") ?? "고시";
++  const effectiveDate = findKey(json, "시행일자") ?? null;
++  const lines = flatStrings(findKey(json, "조문내용")).map(clean).filter(Boolean);
++  const chunks = [];
++  let chapter = null;
++  let current = null;
++
++  const flush = () => {
++    if (!current) return;
++    splitLong(clean(current.lines.join(" "))).forEach((part, i, all) => {
++      chunks.push({
++        id: `${name}|${current.article}${all.length > 1 ? `#${i + 1}` : ""}`,
++        source: name,
++        kind,
++        article: current.article,
++        title: current.title,
++        chapter,
++        effectiveDate,
++        text: part,
++        url: publicUrl("admrul", name),
++      });
++    });
++    current = null;
++  };
++
++  for (const line of lines) {
++    const ch = line.match(/^제\d+장\s*(.*)$/);
++    if (ch) {
++      flush();
++      chapter = line;
++      continue;
++    }
++    const art = line.match(/^(제\d+조(?:의\d+)?)\s*(?:\(([^)]*)\))?/);
++    if (art) {
++      flush();
++      if (/^제\d+조(의\d+)?\s*삭제/.test(line)) continue;
++      current = { article: art[1], title: art[2] ?? null, lines: [line] };
++    } else if (current) {
++      current.lines.push(line);
++    }
++  }
++  flush();
++  return { name, kind, effectiveDate, chunks };
++}
++
++// ─── 실행 ───────────────────────────────────────────────────────────────────
++
++async function getJson(path, params, OC) {
++  const qs = new URLSearchParams({ OC, type: "JSON", ...params });
++  const res = await fetch(`${BASE}/${path}?${qs}`, { headers: { Accept: "application/json" } });
++  const text = (await res.text()).split(OC).join("<OC>");
++  if (!res.ok) throw new Error(`HTTP ${res.status}: ${text.slice(0, 200)}`);
++  try {
++    return { json: JSON.parse(text), text };
++  } catch {
++    throw new Error(`JSON 이 아닌 응답: ${text.slice(0, 200)}`);
++  }
++}
++
++/** 검색 결과에서 이름이 맞는 현행 문서를 고른다. */
++function pickFromSearch(json, target, match) {
++  const list = asArray(target === "law" ? json?.LawSearch?.law : json?.AdmRulSearch?.admrul);
++  return list
++    .filter((it) => (it.현행연혁코드 ?? it.현행연혁구분 ?? "현행") === "현행")
++    .filter((it) => match(target === "law" ? it.법령명한글 : it.행정규칙명));
++}
++
++async function main() {
++  const OC = process.env.LAW_API_OC ?? readEnvFile(".env.local").LAW_API_OC;
++  if (!OC) {
++    console.error("LAW_API_OC 가 없습니다. .env.local 에 LAW_API_OC=발급받은OC값 을 추가하세요.");
++    process.exit(1);
++  }
++  mkdirSync(DEBUG_DIR, { recursive: true });
++
++  const documents = [];
++  const seen = new Set();
++
++  for (const { target, query, match } of SOURCES) {
++    let picks;
++    try {
++      const { json } = await getJson("lawSearch.do", { target, query, display: "20" }, OC);
++      picks = pickFromSearch(json, target, match);
++    } catch (err) {
++      console.error(`[검색 실패] ${target} "${query}": ${err.message}`);
++      continue;
++    }
++    if (picks.length === 0) console.warn(`[없음] ${target} "${query}" 에 맞는 현행 문서가 없습니다.`);
++
++    for (const item of picks) {
++      const key = target === "law" ? item.법령일련번호 : item.행정규칙일련번호;
++      if (seen.has(`${target}:${key}`)) continue;
++      seen.add(`${target}:${key}`);
++      const params = target === "law" ? { target, MST: key } : { target, ID: key };
++      try {
++        const { json, text } = await getJson("lawService.do", params, OC);
++        const doc = target === "law" ? flattenLaw(json) : flattenAdmrul(json);
++        if (!doc || doc.chunks.length === 0) {
++          // 구조가 예상과 다르면 원문을 남겨 두고 넘어간다 — 이 파일을 보고 파서를 고친다.
++          const file = `${DEBUG_DIR}/unparsed-${target}-${key}.txt`;
++          writeFileSync(file, text.slice(0, 300_000), "utf8");
++          console.warn(`[분해 실패] ${target} ${key} → ${file} 를 확인하세요.`);
++          continue;
++        }
++        documents.push({ target, ...doc });
++        console.log(`[OK] ${doc.name} (${doc.kind}, 시행 ${doc.effectiveDate}) → 조문 ${doc.chunks.length}개`);
++      } catch (err) {
++        console.error(`[전문 실패] ${target} ${key}: ${err.message}`);
++      }
++    }
++  }
++
++  const corpus = {
++    generatedAt: new Date().toISOString(),
++    source: "국가법령정보 공동활용 OPEN API (open.law.go.kr)",
++    documents: documents.map(({ target, name, kind, effectiveDate, chunks }) => ({
++      target,
++      name,
++      kind,
++      effectiveDate,
++      url: publicUrl(target, name),
++      chunkCount: chunks.length,
++    })),
++    chunks: documents.flatMap((d) => d.chunks),
++  };
++  writeFileSync(OUT_FILE, JSON.stringify(corpus, null, 1), "utf8");
++  console.log(`\n저장: ${OUT_FILE} · 문서 ${corpus.documents.length}개 · 조문 덩어리 ${corpus.chunks.length}개`);
++}
++
++// 다른 파일에서 파서만 가져다 쓸 수 있게, 직접 실행할 때만 main 을 돈다.
++if (import.meta.url === pathToFileURL(process.argv[1] ?? "").href) {
++  main().catch((err) => {
++    console.error(err);
++    process.exit(1);
++  });
++}
+diff --git a/src/app/api/advisor/route.ts b/src/app/api/advisor/route.ts
+new file mode 100644
+index 0000000..4310e20
+--- /dev/null
++++ b/src/app/api/advisor/route.ts
+@@ -0,0 +1,244 @@
++import { NextResponse } from "next/server";
++import {
++  eligibleMeasures,
++  minimalCombos,
++  rankByQuestion,
++  subsidyCheck,
++  type AdvisorAction,
++  type AdvisorCitation,
++  type AdvisorRequest,
++  type AdvisorResponse,
++  type MeasureCode,
++} from "@/src/lib/law-advisor";
++import { expandQuery, lawCorpusGeneratedAt, searchLaw, type LawHit } from "@/src/lib/law-search";
++
++/**
++ * 검색형 AI 상담 — 법령·공고에서 근거를 찾고(검색), Gemini 가 그 근거만 인용해 답한다(생성).
++ *
++ * 1. 질문을 법령 어휘로 넓혀 조문을 BM25 로 찾는다 (`law-search.ts`).
++ * 2. 이 건물에 의미 있는 조치만 남긴다 (지역난방이면 보일러 제외 등).
++ * 3. Gemini 에게 "아래 근거 id 만 인용하라" 고 시키고, 돌아온 인용이 실제 근거 목록에 있는지 검사한다.
++ * 4. 절감률 누적·이자지원 요건은 서버가 계산한다 — AI 가 숫자를 만들지 않게.
++ * 키가 없거나 호출·검증이 실패하면 같은 근거로 규칙 기반 답을 돌려준다.
++ */
++
++const GEMINI_MODEL = "gemini-3.5-flash";
++const GEMINI_ENDPOINT = `https://generativelanguage.googleapis.com/v1beta/models/${GEMINI_MODEL}:generateContent`;
++const GEMINI_TIMEOUT_MS = 30_000;
++const MAX_QUESTION_CHARS = 300;
++const HIT_LIMIT = 8;
++
++const CAUTION =
++  "법령·공고를 바탕으로 한 안내이며 법률 자문이 아닙니다. 실제 지원 여부와 개선률은 그린리모델링 창조센터의 진단으로 확정됩니다.";
++
++function toCitation(hit: LawHit): AdvisorCitation {
++  return {
++    id: hit.id,
++    source: hit.source,
++    kind: hit.kind,
++    article: hit.article,
++    title: hit.title,
++    url: hit.url,
++    excerpt: hit.text.length > 160 ? `${hit.text.slice(0, 160)}…` : hit.text,
++  };
++}
++
++/** 건물 정보에서 검색에 도움이 되는 낱말 — 용도에 따라 다른 조문이 걸리게. */
++function contextTerms(req: AdvisorRequest): string[] {
++  const b = req.building;
++  const terms = ["그린리모델링", "에너지 성능"];
++  if (/공동주택|아파트|주택/.test(b.useType)) terms.push("주거 공동주택");
++  else terms.push("비주거 건축물");
++  if (b.completionYear && b.completionYear < 2001) terms.push("기존 건축물 에너지성능 개선");
++  return terms;
++}
++
++function gradeSentence(req: AdvisorRequest): string {
++  const b = req.building;
++  switch (b.gradeStatus) {
++    case "certified":
++      return `공식 인증 등급 ${b.gradeLabel}`;
++    case "estimated":
++      return `추정 등급 ${b.gradeLabel} (공식 등급 아님)`;
++    case "range":
++      return `추정 범위 ${b.gradeLabel} (하나로 단정할 수 없음)`;
++    case "refused":
++      return "비교할 인증 사례가 부족해 등급을 추정하지 않음";
++    default:
++      return "등급 정보 없음";
++  }
++}
++
++function buildPrompt(req: AdvisorRequest, hits: LawHit[], measures: ReturnType<typeof eligibleMeasures>): string {
++  const b = req.building;
++  return [
++    "당신은 건축물 에너지 성능 개선(그린리모델링) 상담가입니다. 아래 규칙을 반드시 지키세요.",
++    "1. [근거 목록]에 있는 내용만 근거로 삼고, 법령이나 공고를 언급하면 그 id 를 citationIds 에 넣으세요.",
++    "2. [근거 목록]에 없는 조문 번호, 금액, 비율은 절대 쓰지 마세요. 근거가 부족하면 '확인된 근거가 없다'고 말하세요.",
++    "3. 조치는 [가능한 조치]의 code 에서만 고르세요(최대 3개). 절감률은 표의 숫자만 쓰세요.",
++    "4. 등급이 추정·범위·보류이면 단정하지 마세요.",
++    "5. 고령자도 이해할 수 있게 쉬운 존댓말로 3~5문장. 전문용어는 괄호로 짧게 풀어 주세요.",
++    "6. 이자지원 요건 충족 여부는 서버가 따로 계산하니, 답변에서 퍼센트를 새로 계산하지 마세요.",
++    "",
++    "[건물]",
++    `- 이름: ${b.name}`,
++    `- 용도: ${b.useType}`,
++    `- 준공연도: ${b.completionYear ?? "알 수 없음"} / 적용 단열기준: ${b.insulationEra ?? "알 수 없음"}`,
++    `- 난방 방식: ${b.heatingType ?? "알 수 없음"}`,
++    `- 등급: ${gradeSentence(req)}`,
++    `- 질문한 사람: ${req.audience === "tenant" ? "임차인(세입자)" : "소유주"}`,
++    "",
++    "[가능한 조치] code | 이름 | 1차에너지 절감률 | 공사 규모(1~3) | 제약",
++    ...measures.map((m) => `- ${m.code} | ${m.title} | ${m.reductionPct}% | ${m.costLevel} | ${m.needs ?? "없음"}`),
++    "",
++    "[근거 목록] id | 문서 | 조문 | 내용",
++    ...hits.map((h) => `- ${h.id} | ${h.source} (${h.kind}) | ${h.article}${h.title ? `(${h.title})` : ""} | ${h.text}`),
++    "",
++    `[질문] ${req.question}`,
++  ].join("\n");
++}
++
++function responseSchema(codes: MeasureCode[], ids: string[]) {
++  return {
++    type: "OBJECT",
++    properties: {
++      answer: { type: "STRING", description: "질문에 대한 답, 쉬운 존댓말 3~5문장" },
++      actions: {
++        type: "ARRAY",
++        maxItems: 3,
++        items: {
++          type: "OBJECT",
++          properties: {
++            code: { type: "STRING", enum: codes },
++            reason: { type: "STRING", description: "이 건물에 이 조치를 권하는 이유, 한 문장" },
++            citationIds: { type: "ARRAY", items: { type: "STRING", enum: ids } },
++          },
++          required: ["code", "reason", "citationIds"],
++        },
++      },
++      citationIds: { type: "ARRAY", items: { type: "STRING", enum: ids } },
++    },
++    required: ["answer", "actions", "citationIds"],
++  };
++}
++
++interface GeminiAdvice {
++  answer: string;
++  actions: { code: string; reason: string; citationIds: string[] }[];
++  citationIds: string[];
++}
++
++/** Gemini 답을 받아들일지 검사한다. 근거 목록 밖의 인용·조치는 버리고, 근거가 하나도 없으면 거절한다. */
++function acceptAdvice(raw: unknown, hitIds: Set<string>, measures: ReturnType<typeof eligibleMeasures>) {
++  const advice = raw as Partial<GeminiAdvice>;
++  if (typeof advice?.answer !== "string" || advice.answer.trim().length < 10) return { reason: "답변 없음" } as const;
++
++  const allowed = new Map(measures.map((m) => [m.code as string, m]));
++  const keepIds = (list: unknown) =>
++    Array.isArray(list) ? [...new Set(list.filter((id): id is string => typeof id === "string" && hitIds.has(id)))] : [];
++
++  const actions: AdvisorAction[] = [];
++  for (const a of Array.isArray(advice.actions) ? advice.actions : []) {
++    const m = a && allowed.get(a.code);
++    if (!m || actions.some((x) => x.code === m.code)) continue;
++    actions.push({ ...m, reason: String(a.reason ?? "").trim(), citationIds: keepIds(a.citationIds) });
++  }
++  const citationIds = [...new Set([...keepIds(advice.citationIds), ...actions.flatMap((a) => a.citationIds)])];
++  if (citationIds.length === 0) return { reason: "근거 인용 없음" } as const;
++  return { answer: advice.answer.trim(), actions, citationIds } as const;
++}
++
++function fallbackAdvice(req: AdvisorRequest, hits: LawHit[], measures: ReturnType<typeof eligibleMeasures>) {
++  const ranked = rankByQuestion(req.question, measures.map((m) => m.code));
++  const topIds = hits.slice(0, 3).map((h) => h.id);
++  const actions: AdvisorAction[] = ranked.slice(0, 3).map((code) => {
++    const m = measures.find((x) => x.code === code)!;
++    return {
++      ...m,
++      reason: `1차에너지소요량을 약 ${m.reductionPct}% 줄이는 조치입니다.${m.needs ? ` (${m.needs})` : ""}`,
++      citationIds: [],
++    };
++  });
++  const lead = hits[0]
++    ? `관련 근거로 ${hits[0].source} ${hits[0].article}${hits[0].title ? `(${hits[0].title})` : ""}을 찾았습니다.`
++    : "관련 법령 근거를 찾지 못했습니다.";
++  return {
++    answer: `${lead} 이 건물에서 먼저 검토할 만한 조치는 ${actions.map((a) => a.title).join(", ")}입니다. 아래 근거 원문과 지원 요건을 함께 확인해 주세요.`,
++    actions,
++    citationIds: topIds,
++  };
++}
++
++export async function POST(request: Request) {
++  let req: AdvisorRequest;
++  try {
++    req = (await request.json()) as AdvisorRequest;
++  } catch {
++    return NextResponse.json({ message: "잘못된 요청" }, { status: 400 });
++  }
++  const question = String(req?.question ?? "").trim().slice(0, MAX_QUESTION_CHARS);
++  if (!question || !req?.building) return NextResponse.json({ message: "질문과 건물 정보가 필요합니다" }, { status: 400 });
++  req = { ...req, question, audience: req.audience === "tenant" ? "tenant" : "owner" };
++
++  const hits = searchLaw(expandQuery(question, contextTerms(req)), HIT_LIMIT);
++  const measures = eligibleMeasures(req.building, req.audience);
++  const codes = measures.map((m) => m.code);
++  const hitById = new Map(hits.map((h) => [h.id, h]));
++
++  const finish = (
++    advice: { answer: string; actions: AdvisorAction[]; citationIds: string[] },
++    source: AdvisorResponse["source"],
++    fallbackReason?: string,
++  ) => {
++    const body: AdvisorResponse = {
++      source,
++      answer: advice.answer,
++      actions: advice.actions,
++      subsidy: subsidyCheck(advice.actions.map((a) => a.code)),
++      minimalCombos: minimalCombos(measures),
++      citations: advice.citationIds.map((id) => hitById.get(id)).filter((h): h is LawHit => Boolean(h)).map(toCitation),
++      caution: CAUTION,
++      lawAsOf: lawCorpusGeneratedAt(),
++      ...(fallbackReason ? { fallbackReason } : {}),
++    };
++    return NextResponse.json(body);
++  };
++
++  const apiKey = process.env.GEMINI_API_KEY;
++  if (!apiKey || hits.length === 0) {
++    return finish(fallbackAdvice(req, hits, measures), "fallback", !apiKey ? "GEMINI_API_KEY 없음" : "근거 없음");
++  }
++
++  try {
++    const res = await fetch(`${GEMINI_ENDPOINT}?key=${apiKey}`, {
++      method: "POST",
++      headers: { "Content-Type": "application/json" },
++      signal: AbortSignal.timeout(GEMINI_TIMEOUT_MS),
++      body: JSON.stringify({
++        contents: [{ parts: [{ text: buildPrompt(req, hits, measures) }] }],
++        generationConfig: {
++          // 근거를 고르고 요약하는 일이라 깊게 생각할 필요가 없다 — 응답 속도를 우선한다.
++          maxOutputTokens: 4096,
++          thinkingConfig: { thinkingLevel: "low" },
++          temperature: 0.3,
++          responseMimeType: "application/json",
++          responseSchema: responseSchema(codes, hits.map((h) => h.id)),
++        },
++      }),
++    });
++    if (!res.ok) throw new Error(`Gemini API error: ${res.status} ${(await res.text()).slice(0, 200)}`);
++
++    const json = await res.json();
++    const parts: { text?: string; thought?: boolean }[] = json?.candidates?.[0]?.content?.parts ?? [];
++    const text = parts.filter((p) => !p.thought && typeof p.text === "string").map((p) => p.text).join("");
++    if (!text) throw new Error(`Gemini 응답 없음 (finishReason ${json?.candidates?.[0]?.finishReason ?? "?"})`);
++
++    const verdict = acceptAdvice(JSON.parse(text), new Set(hitById.keys()), measures);
++    if ("reason" in verdict) throw new Error(`Gemini 답변 거절: ${verdict.reason}`);
++    return finish(verdict, "gemini");
++  } catch (error) {
++    console.error("[api/advisor] Gemini call failed, using fallback", error);
++    return finish(fallbackAdvice(req, hits, measures), "fallback", error instanceof Error ? error.message : String(error));
++  }
++}
++
+diff --git a/src/app/report/[buildingId]/_components/ReportBody.tsx b/src/app/report/[buildingId]/_components/ReportBody.tsx
+index bf0f269..ba8719d 100644
+--- a/src/app/report/[buildingId]/_components/ReportBody.tsx
++++ b/src/app/report/[buildingId]/_components/ReportBody.tsx
+@@ -2,7 +2,9 @@
+ 
+ import { useEffect, useState } from "react";
+ import type { ReactNode } from "react";
++import { AiLawAdvisor } from "@/src/components/domain/AiLawAdvisor";
+ import { AiRemodelReport, type AiRemodelReportProps } from "@/src/components/domain/AiRemodelReport";
++import type { AdvisorBuilding } from "@/src/lib/law-advisor";
+ import { Badge, ButtonLink, Card, Icon } from "@/src/components/ui";
+ import { getExampleEnergyCost } from "@/src/data/energy-cost";
+ import { fetchEnergyCost } from "@/src/lib/eco-api";
+@@ -36,6 +38,13 @@ export interface ReportBodyProps {
+    * 생략하면 배출량이 두 배 넘게 부풀려집니다.
+    */
+   heatingType?: string;
++  /**
++   * 신뢰도 게이트가 추정을 거절한 경우. 비용·탄소 같은 파생 숫자는 1차에너지소요량이
++   * 없으면 만들 수 없으므로, 그 자리에 거절 사유와 확인된 사실을 보여 준다.
++   */
++  refusal?: { reason?: string; points: string[] } | null;
++  /** 검색형 AI 상담에 넘길 건물 정보. 없으면 상담 카드를 그리지 않는다. */
++  advisor?: AdvisorBuilding;
+   /** Rendered between the AI remodel report and the savings card (the grade scale). */
+   children?: ReactNode;
+ }
+@@ -53,6 +62,8 @@ export function ReportBody({
+   fetchLiveMetrics,
+   areaSqm,
+   heatingType,
++  refusal = null,
++  advisor,
+   children,
+ }: ReportBodyProps) {
+   const [metrics, setMetrics] = useState<ReportMetrics | null>(initialMetrics);
+@@ -92,6 +103,9 @@ export function ReportBody({
+         />
+       ) : null}
+ 
++      {/* 추정 보류 단지도 상담은 받을 수 있다 — 등급 대신 법령·지원 요건으로 다음 행동을 안내한다. */}
++      {advisor ? <AiLawAdvisor building={advisor} /> : null}
++
+       {children}
+ 
+       {!ready ? null : metrics ? (
+@@ -118,6 +132,36 @@ export function ReportBody({
+             절감 하기 보기
+           </ButtonLink>
+         </Card>
++      ) : refusal ? (
++        <Card tone="sunken" padding="lg" className="flex flex-col items-start gap-[var(--space-4)]">
++          <Badge tone="caution">등급 추정 보류</Badge>
++          <div className="flex flex-col gap-[var(--space-2)]">
++            <h2 className="eco-heading">이 단지는 등급을 말하지 않습니다</h2>
++            <p className="max-w-[var(--width-reading)] text-[length:var(--text-body-size)] text-[var(--text-muted)]">
++              같은 시기에 지어진 단지의 검증 사례가 부족해, 모델 오차가 등급 한 칸보다 클 수 있어요. 틀릴 수 있는
++              등급 대신 확인된 사실만 보여 드려요.
++              {refusal.reason ? ` (사유: ${refusal.reason})` : ""}
++            </p>
++          </div>
++          {refusal.points.length > 0 ? (
++            <ul className="flex flex-col gap-[var(--space-2)] text-[length:var(--text-body-size)] text-[var(--text-body)]">
++              {refusal.points.map((point) => (
++                <li key={point} className="flex gap-2">
++                  <span aria-hidden className="text-[var(--teal-600)]">·</span>
++                  <span>{point}</span>
++                </li>
++              ))}
++            </ul>
++          ) : null}
++          <div className="flex flex-wrap gap-[var(--space-3)]">
++            <ButtonLink href={`/guide/${buildingId}`} variant="primary">
++              개선 방법 보기
++            </ButtonLink>
++            <ButtonLink href="/programs" variant="ghost">
++              지원사업 보기
++            </ButtonLink>
++          </div>
++        </Card>
+       ) : (
+         <Card tone="sunken" padding="lg" className="flex flex-col items-start gap-[var(--space-4)]">
+           <Badge tone="brand">프로토타입 안내</Badge>
+diff --git a/src/app/report/[buildingId]/_components/ReportOverview.tsx b/src/app/report/[buildingId]/_components/ReportOverview.tsx
+index 4dcf7d2..b901396 100644
+--- a/src/app/report/[buildingId]/_components/ReportOverview.tsx
++++ b/src/app/report/[buildingId]/_components/ReportOverview.tsx
+@@ -39,6 +39,11 @@ export interface ReportOverviewProps {
+   primaryEnergyKwh: number;
+   grade: GradeCode;
+   isEstimated: boolean;
++  /**
++   * 신뢰도 게이트가 추정을 거절한 건물. `grade`는 자리만 채운 값이라 화면에 내면 안 된다 —
++   * 등급 대신 회색 「?」 배지를 보여 준다.
++   */
++  gradeUnknown?: boolean;
+   basisRows: BasisRow[];
+   /** Detailed report figures; `null` for buildings without a full report fixture. */
+   metrics: ReportMetrics | null;
+@@ -64,6 +69,7 @@ export function ReportOverview({
+   primaryEnergyKwh,
+   grade,
+   isEstimated,
++  gradeUnknown = false,
+   basisRows,
+   metrics,
+ }: ReportOverviewProps) {
+@@ -121,11 +127,24 @@ export function ReportOverview({
+           <p className="text-[length:var(--text-caption-size)] text-[var(--text-muted)]">{address}</p>
+         </div>
+ 
+-        <EnergyGradeBadge
+-          grade={displayGrade}
+-          size="lg"
+-          caption={showingProjection ? "개선 후 예상 등급" : isEstimated ? "추정 등급" : "인증 등급"}
+-        />
++        {gradeUnknown && !showingProjection ? (
++          // EnergyGradeBadge size="lg"와 같은 크기의 회색 배지 — 등급을 말하지 않는다는 것 자체가 결과다.
++          <span className="inline-flex shrink-0 flex-col items-center gap-[var(--space-2)]">
++            <span className="flex h-[116px] w-[116px] items-center justify-center rounded-[var(--radius-lg)] border-[3px] border-[var(--ink-300)] bg-[var(--surface-sunken)] font-brand text-[64px] font-black leading-none text-[var(--ink-400)]">
++              <span aria-hidden="true">?</span>
++              <span className="sr-only">등급 추정 보류</span>
++            </span>
++            <span className="whitespace-nowrap text-[length:var(--text-caption-size)] font-medium text-[var(--text-muted)]">
++              추정 보류
++            </span>
++          </span>
++        ) : (
++          <EnergyGradeBadge
++            grade={displayGrade}
++            size="lg"
++            caption={showingProjection ? "개선 후 예상 등급" : isEstimated ? "추정 등급" : "인증 등급"}
++          />
++        )}
+ 
+         {metrics ? (
+           <TabList aria-label="성적표 시점 선택" className="w-full">
+diff --git a/src/app/report/[buildingId]/_lib/use-what-if-projection.ts b/src/app/report/[buildingId]/_lib/use-what-if-projection.ts
+index 47ccf2e..d34c4c2 100644
+--- a/src/app/report/[buildingId]/_lib/use-what-if-projection.ts
++++ b/src/app/report/[buildingId]/_lib/use-what-if-projection.ts
+@@ -39,11 +39,12 @@ export function useWhatIfProjection(
+     [actions],
+   );
+   const localResult = useMemo(
+-    () => (actions.length > 0 ? simulateWhatIfLocally(primaryEnergyKwh, realGrade, actions) : null),
++    // 1차에너지소요량이 없으면(추정 보류) 개선 후를 계산할 기준이 없다 — 지어내지 않는다.
++    () => (actions.length > 0 && primaryEnergyKwh > 0 ? simulateWhatIfLocally(primaryEnergyKwh, realGrade, actions) : null),
+     [actions, primaryEnergyKwh, realGrade],
+   );
+ 
+-  const requestKey = measureCodes.length > 0 ? `${primaryEnergyKwh}|${measureCodes.join(",")}|${useType}` : null;
++  const requestKey = measureCodes.length > 0 && primaryEnergyKwh > 0 ? `${primaryEnergyKwh}|${measureCodes.join(",")}|${useType}` : null;
+   const [remote, setRemote] = useState<{ key: string; result: WhatIfResult } | null>(null);
+ 
+   useEffect(() => {
+diff --git a/src/app/report/[buildingId]/page.tsx b/src/app/report/[buildingId]/page.tsx
+index 5592d16..f7f21e3 100644
+--- a/src/app/report/[buildingId]/page.tsx
++++ b/src/app/report/[buildingId]/page.tsx
+@@ -14,6 +14,7 @@ import { getDistrict } from "@/src/lib/audience";
+ import { HEATING_TYPE_OPTIONS, readApartmentChecklistParams } from "@/src/lib/apartment-checklist";
+ import type { BasisRow } from "./_components/ReportOverview";
+ import { ReportBody } from "./_components/ReportBody";
++import type { AdvisorBuilding } from "@/src/lib/law-advisor";
+ 
+ /** `?bn=` carries the Kakao 건물명 on older links whose id doesn't have it packed in. */
+ function readBuildingName(raw: string | string[] | undefined): string | undefined {
+@@ -257,6 +258,35 @@ export default async function ReportPage({ params, searchParams }: PageProps<"/r
+   const isEstimated = building.gradeSource === "estimated";
+   const live = building.liveMatch;
+   const estimate = building.estimate;
++  // 신뢰도 게이트가 추정을 거절한 단지 — building.grade는 자리만 채운 값이라 화면에 쓰지 않는다.
++  const gradeUnknown = building.apartment?.source === "unknown";
++
++  /**
++   * 검색형 AI 상담에 넘길 건물 정보. 등급은 화면에 보이는 수준 그대로 넘겨,
++   * 상담이 추정·범위·보류 등급을 단정하지 않게 한다.
++   */
++  const aptRaw = building.rawSource?.kind === "apt" ? building.rawSource.data : null;
++  const aptSource = building.apartment?.source;
++  const advisorBuilding: AdvisorBuilding = {
++    name: building.name,
++    useType: building.useType,
++    completionYear: building.completionYear ?? null,
++    insulationEra: building.apartment?.insulationEra ?? building.insulationStandard ?? null,
++    heatingType: building.apartment?.heatingType ?? building.heatingType ?? null,
++    gradeLabel: gradeUnknown
++      ? null
++      : aptSource === "estimated-range" && aptRaw?.estimate
++        ? `${aptRaw.estimate.gradeBest}~${aptRaw.estimate.gradeWorst}등급 범위`
++        : `${building.grade}등급`,
++    gradeStatus: gradeUnknown
++      ? "refused"
++      : aptSource === "estimated-range"
++        ? "range"
++        : isEstimated
++          ? "estimated"
++          : "certified",
++    primaryEnergyKwh: gradeUnknown || !building.primaryEnergyKwh ? null : building.primaryEnergyKwh,
++  };
+ 
+   /**
+    * 지도에서 강조할 동네.
+@@ -308,6 +338,7 @@ export default async function ReportPage({ params, searchParams }: PageProps<"/r
+             primaryEnergyKwh: building.primaryEnergyKwh,
+             grade: building.grade,
+             isEstimated,
++            gradeUnknown,
+             basisRows:
+               (isEstimated ? buildRawBasisRows(building) : null) ??
+               (building.apartment
+@@ -337,12 +368,21 @@ export default async function ReportPage({ params, searchParams }: PageProps<"/r
+                 }
+               : null
+           }
+-          fetchLiveMetrics={live !== undefined || estimate !== undefined || building.apartment !== undefined}
++          // 추정 보류 단지는 1차에너지소요량이 없어 비용·탄소를 계산할 수 없다 — 예시값으로 채우지 않는다.
++          fetchLiveMetrics={
++            !gradeUnknown && (live !== undefined || estimate !== undefined || building.apartment !== undefined)
++          }
++          refusal={
++            gradeUnknown
++              ? { reason: building.apartment?.disclaimer, points: building.apartment?.whatWeCanSay ?? [] }
++              : null
++          }
+           // 연간 에너지 비용·탄소 배출은 1차에너지소요량 × 연면적입니다.
+           areaSqm={building.areaSqm}
+           // 탄소 배출 계산에 씁니다. 도시가스 난방인데 안 넘기면 전력 계수로 계산돼
+           // 배출량이 두 배 넘게 부풀려집니다.
+           heatingType={building.apartment?.heatingType ?? building.heatingType}
++          advisor={advisorBuilding}
+         >
+           {checklist ? (
+             <Card padding="lg" className="flex flex-col gap-[var(--space-4)]">
+@@ -368,7 +408,7 @@ export default async function ReportPage({ params, searchParams }: PageProps<"/r
+               hint="다른 등급을 누르면 연간 단위면적당 1차에너지소요량을 볼 수 있습니다."
+               hintSize="sm"
+             />
+-            <GradeScale value={building.grade} selectable />
++            <GradeScale value={gradeUnknown ? null : building.grade} selectable />
+           </Card>
+ 
+           <Card padding="lg" className="flex flex-col gap-[var(--space-4)]">
+diff --git a/src/components/domain/AiLawAdvisor.tsx b/src/components/domain/AiLawAdvisor.tsx
+new file mode 100644
+index 0000000..aa173e9
+--- /dev/null
++++ b/src/components/domain/AiLawAdvisor.tsx
+@@ -0,0 +1,240 @@
++"use client";
++
++import { useId, useRef, useState } from "react";
++import type { FormEvent } from "react";
++import { Badge, Button, Card, Icon } from "@/src/components/ui";
++import {
++  EXAMPLE_QUESTIONS,
++  measureTitle,
++  type AdvisorAudience,
++  type AdvisorBuilding,
++  type AdvisorResponse,
++} from "@/src/lib/law-advisor";
++
++export interface AiLawAdvisorProps {
++  building: AdvisorBuilding;
++}
++
++/** 리포트 카드와 같은 가독성 기준 — 본문 17px 이상. */
++const BODY = "text-[17px] leading-relaxed text-[var(--text-body)]";
++const MUTED = "text-[15px] leading-relaxed text-[var(--text-muted)]";
++
++const TIER_TONE: Record<NonNullable<AdvisorResponse["subsidy"]>["tier"], "good" | "caution" | "neutral"> = {
++  preferred: "good",
++  general: "good",
++  below: "caution",
++};
++
++/**
++ * 검색형 AI 상담 카드 — 질문을 받으면 `/api/advisor` 가 법령·공고에서 근거를 찾고,
++ * Gemini 가 그 근거만 인용해 답한다. 근거 조문은 원문 링크와 함께 보여 준다.
++ * 지원 요건 판정과 최소 조합은 서버가 계산한 숫자를 그대로 쓴다.
++ */
++export function AiLawAdvisor({ building }: AiLawAdvisorProps) {
++  const inputId = useId();
++  const answerId = useId();
++  const inputRef = useRef<HTMLTextAreaElement>(null);
++  const [question, setQuestion] = useState("");
++  const [audience, setAudience] = useState<AdvisorAudience>("owner");
++  const [loading, setLoading] = useState(false);
++  const [error, setError] = useState<string | null>(null);
++  const [result, setResult] = useState<AdvisorResponse | null>(null);
++
++  async function ask(text: string) {
++    const q = text.trim();
++    if (!q || loading) return;
++    setQuestion(q);
++    setLoading(true);
++    setError(null);
++    try {
++      const res = await fetch("/api/advisor", {
++        method: "POST",
++        headers: { "Content-Type": "application/json" },
++        body: JSON.stringify({ question: q, building, audience }),
++      });
++      if (!res.ok) throw new Error(`status ${res.status}`);
++      setResult((await res.json()) as AdvisorResponse);
++    } catch {
++      setError("상담 답변을 불러오지 못했어요. 잠시 후 다시 시도해 주세요.");
++    } finally {
++      setLoading(false);
++    }
++  }
++
++  function onSubmit(event: FormEvent) {
++    event.preventDefault();
++    void ask(question);
++  }
++
++  const citationIndex = new Map(result?.citations.map((c, i) => [c.id, i + 1]) ?? []);
++
++  return (
++    <Card padding="lg" className="flex flex-col gap-[var(--space-5)]">
++      <div className="flex items-start gap-[var(--space-4)]">
++        <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-full bg-[var(--teal-600)] text-white">
++          <Icon name="sparkles" size={18} />
++        </div>
++        <div className="min-w-0">
++          <h2 className="eco-heading">AI 그린리모델링 상담</h2>
++          <p className={MUTED}>
++            궁금한 점을 물어보면 녹색건축물 조성 지원법 같은 법령과 지원사업 공고에서 근거를 찾아 답해요.
++          </p>
++        </div>
++      </div>
++
++      <fieldset className="flex flex-wrap items-center gap-[var(--space-2)]">
++        <legend className="sr-only">질문하는 사람</legend>
++        {(
++          [
++            ["owner", "소유주예요"],
++            ["tenant", "세입자예요"],
++          ] as const
++        ).map(([value, label]) => (
++          <Button
++            key={value}
++            size="sm"
++            variant={audience === value ? "primary" : "secondary"}
++            aria-pressed={audience === value}
++            onClick={() => setAudience(value)}
++          >
++            {label}
++          </Button>
++        ))}
++      </fieldset>
++
++      <div className="flex flex-wrap gap-[var(--space-2)]" aria-label="예시 질문">
++        {EXAMPLE_QUESTIONS.map((example) => (
++          <Button key={example} size="sm" variant="outline" disabled={loading} onClick={() => void ask(example)}>
++            {example}
++          </Button>
++        ))}
++      </div>
++
++      <form onSubmit={onSubmit} className="flex flex-col gap-[var(--space-3)] sm:flex-row sm:items-end">
++        <div className="flex min-w-0 flex-1 flex-col gap-[var(--space-1)]">
++          <label htmlFor={inputId} className="text-[16px] font-bold text-[var(--text-strong)]">
++            직접 물어보기
++          </label>
++          <textarea
++            id={inputId}
++            ref={inputRef}
++            rows={2}
++            maxLength={300}
++            value={question}
++            onChange={(e) => setQuestion(e.target.value)}
++            onKeyDown={(e) => {
++              // 한글 조합 중 Enter 는 글자 확정이므로 전송하지 않는다.
++              if (e.key === "Enter" && !e.shiftKey && !e.nativeEvent.isComposing) {
++                e.preventDefault();
++                void ask(question);
++              }
++            }}
++            placeholder="예: 우리 건물은 어떤 공사를 하면 지원을 받을 수 있나요?"
++            className="w-full resize-none rounded-[var(--radius-md)] border border-[var(--border-strong)] bg-[var(--surface-card)] px-[var(--space-3)] py-[var(--space-2)] text-[17px] text-[var(--text-strong)] placeholder:text-[var(--text-muted)]"
++          />
++        </div>
++        <Button type="submit" size="lg" loading={loading} disabled={!question.trim()}>
++          질문하기
++        </Button>
++      </form>
++
++      <div id={answerId} aria-live="polite" aria-busy={loading} className="flex flex-col gap-[var(--space-5)]">
++        {loading ? <p className={MUTED}>법령과 공고에서 근거를 찾고 있어요…</p> : null}
++        {error ? <p className="text-[17px] text-[var(--status-danger)]">{error}</p> : null}
++
++        {result && !loading ? (
++          <>
++            <div className="flex flex-col gap-[var(--space-2)]">
++              <div className="flex flex-wrap items-center gap-[var(--space-2)]">
++                <Badge tone={result.source === "gemini" ? "good" : "neutral"}>
++                  {result.source === "gemini" ? "Gemini · 근거 인용" : "규칙 기반 · 근거 검색"}
++                </Badge>
++                {result.lawAsOf ? (
++                  <span className={MUTED}>법령 기준일 {result.lawAsOf.slice(0, 10)}</span>
++                ) : null}
++              </div>
++              <p className={BODY}>{result.answer}</p>
++            </div>
++
++            {result.actions.length > 0 ? (
++              <div className="flex flex-col gap-[var(--space-3)]">
++                <h3 className="text-[17px] font-black text-[var(--text-strong)]">추천 조치</h3>
++                <ul className="flex flex-col gap-[var(--space-2)]">
++                  {result.actions.map((action) => (
++                    <li
++                      key={action.code}
++                      className="flex flex-col gap-1 rounded-[var(--radius-md)] border border-[var(--border-subtle)] p-[var(--space-3)]"
++                    >
++                      <div className="flex flex-wrap items-center gap-[var(--space-2)]">
++                        <span className="text-[17px] font-bold text-[var(--text-strong)]">{action.title}</span>
++                        <Badge tone="brand">약 {action.reductionPct}% 절감</Badge>
++                        {action.needs ? <Badge tone="caution">{action.needs}</Badge> : null}
++                      </div>
++                      {action.reason ? <p className={BODY}>{action.reason}</p> : null}
++                      {action.citationIds.length > 0 ? (
++                        <p className={MUTED}>
++                          근거{" "}
++                          {action.citationIds
++                            .map((id) => citationIndex.get(id))
++                            .filter(Boolean)
++                            .map((n) => `[${n}]`)
++                            .join(" ")}
++                        </p>
++                      ) : null}
++                    </li>
++                  ))}
++                </ul>
++              </div>
++            ) : null}
++
++            {result.subsidy ? (
++              <div className="flex flex-col gap-[var(--space-2)] rounded-[var(--radius-md)] bg-[var(--surface-sunken)] p-[var(--space-4)]">
++                <div className="flex flex-wrap items-center gap-[var(--space-2)]">
++                  <span className="text-[17px] font-bold text-[var(--text-strong)]">
++                    추천 조치를 모두 하면 약 {result.subsidy.reductionPercent}% 개선
++                  </span>
++                  <Badge tone={TIER_TONE[result.subsidy.tier]}>{result.subsidy.label}</Badge>
++                </div>
++                {result.minimalCombos.preferred ? (
++                  <p className={MUTED}>
++                    우대(30%) 기준에 닿는 가장 작은 조합: {result.minimalCombos.preferred.map(measureTitle).join(" + ")}
++                  </p>
++                ) : null}
++                {result.minimalCombos.general ? (
++                  <p className={MUTED}>
++                    일반(20%) 기준에 닿는 가장 작은 조합: {result.minimalCombos.general.map(measureTitle).join(" + ")}
++                  </p>
++                ) : null}
++              </div>
++            ) : null}
++
++            {result.citations.length > 0 ? (
++              <div className="flex flex-col gap-[var(--space-2)]">
++                <h3 className="text-[17px] font-black text-[var(--text-strong)]">근거</h3>
++                <ol className="flex flex-col gap-[var(--space-2)]">
++                  {result.citations.map((c, i) => (
++                    <li key={c.id} className="flex flex-col gap-1">
++                      <a
++                        href={c.url}
++                        target="_blank"
++                        rel="noreferrer"
++                        className="inline-flex items-center gap-1 text-[16px] font-bold text-[var(--teal-700)] underline-offset-2 hover:underline"
++                      >
++                        [{i + 1}] {c.source} {c.article}
++                        {c.title ? `(${c.title})` : ""}
++                        <Icon name="external-link" size={14} />
++                      </a>
++                      <p className={MUTED}>{c.excerpt}</p>
++                    </li>
++                  ))}
++                </ol>
++              </div>
++            ) : null}
++
++            <p className="text-[14px] leading-relaxed text-[var(--text-muted)]">{result.caution}</p>
++          </>
++        ) : null}
++      </div>
++    </Card>
++  );
++}
+diff --git a/src/components/domain/GradeScale.tsx b/src/components/domain/GradeScale.tsx
+index b770c9b..f9a3f82 100644
+--- a/src/components/domain/GradeScale.tsx
++++ b/src/components/domain/GradeScale.tsx
+@@ -7,7 +7,8 @@ import { getGradeColorVars } from "./grade-tokens";
+ 
+ export interface GradeScaleProps {
+   /** The building's grade — its bar is raised and fully opaque. */
+-  value: GradeCode;
++  /** `null` = 등급을 말하지 않는 건물(추정 보류). 척도만 보여 주고 강조하지 않는다. */
++  value: GradeCode | null;
+   /** Lets the user tap any grade to see its primary-energy range. */
+   selectable?: boolean;
+   /** Show the grade code under each bar. Defaults to true. */
+@@ -36,11 +37,11 @@ export function GradeScale({ value, selectable = false, showLabels = true, class
+     <div className={cn("flex flex-col gap-[var(--space-3)]", className)}>
+       <div
+         role={selectable ? "group" : "img"}
+-        aria-label={`건물 에너지효율등급 척도, 현재 건물은 ${GRADES[value].label}`}
++        aria-label={value ? `건물 에너지효율등급 척도, 현재 건물은 ${GRADES[value].label}` : "건물 에너지효율등급 척도"}
+         className="flex items-end gap-1"
+       >
+         {GRADE_ORDER.map((code) => {
+-          const current = code === value;
++          const current = value !== null && code === value;
+           const expanded = code === open;
+           const { color } = getGradeColorVars(code);
+           const content = (
+diff --git a/src/data/buildings.ts b/src/data/buildings.ts
+index 522b98d..1adca65 100644
+--- a/src/data/buildings.ts
++++ b/src/data/buildings.ts
+@@ -121,6 +121,8 @@ export interface ApartmentReportInfo {
+   disclaimer?: string;
+   /** `"± N kWh/m²·yr"` for a point estimate. */
+   marginOfError?: number;
++  /** 추정을 거절했을 때(`source: "unknown"`) 등급 대신 보여 줄, 확인된 사실 문장들. */
++  whatWeCanSay?: string[];
+ }
+ 
+ export interface SavedBuilding extends BuildingSummary {
+@@ -437,6 +439,7 @@ function toApartmentBuildingSummary(detail: ApartmentDetail): BuildingSummary |
+       source,
+       disclaimer,
+       marginOfError,
++      whatWeCanSay: source === "unknown" ? (detail.whatWeCanSay?.points ?? []) : undefined,
+     },
+     rawSource: { kind: "apt", data: detail },
+   };
+diff --git a/src/data/policy-facts.ts b/src/data/policy-facts.ts
+new file mode 100644
+index 0000000..7a69deb
+--- /dev/null
++++ b/src/data/policy-facts.ts
+@@ -0,0 +1,62 @@
++/**
++ * 법령이 아닌 공고·지침의 핵심 사실 — 검색형 AI 상담이 법령 조문과 같은 방식으로 인용한다.
++ *
++ * 숫자는 출처에 적힌 그대로만 쓴다. 공고가 바뀌면 이 파일만 고치면 된다.
++ * 링크가 없는 사실은 넣지 않는다(근거 없는 숫자는 인용하지 않는다는 원칙).
++ */
++import type { LawChunk } from "@/src/lib/law-search";
++
++const INTEREST_SUPPORT_URL = "https://v.daum.net/v/20260326043356184";
++const PUBLIC_GR_GUIDE_URL =
++  "https://www.greenremodeling.or.kr/upfile/content/2026%EB%85%84%20%EA%B3%B5%EA%B3%B5%EA%B1%B4%EC%B6%95%EB%AC%BC%20%EA%B7%B8%EB%A6%B0%EB%A6%AC%EB%AA%A8%EB%8D%B8%EB%A7%81%202.0%20%EC%A7%80%EC%9B%90%EC%82%AC%EC%97%85%20%EA%B0%80%EC%9D%B4%EB%93%9C%EB%9D%BC%EC%9D%B8.pdf";
++
++export const POLICY_FACTS: LawChunk[] = [
++  {
++    id: "2026 민간 그린리모델링 이자지원|지원율",
++    source: "2026 민간 그린리모델링 이자지원",
++    kind: "공고",
++    article: "지원율",
++    title: "에너지 성능 개선률에 따른 이자지원율",
++    chapter: null,
++    effectiveDate: "20260317",
++    text:
++      "민간 그린리모델링 이자지원은 주거·비주거 건축물을 모두 대상으로 한다. 에너지 성능이 20% 이상 30% 미만 개선되면 일반 지원으로 이자의 4.5%를, 30% 이상 개선되거나 신혼부부·다자녀·고령자·차상위계층·국가유공자이면 우대 지원으로 5.5%를 지원한다.",
++    url: INTEREST_SUPPORT_URL,
++  },
++  {
++    id: "2026 민간 그린리모델링 이자지원|한도",
++    source: "2026 민간 그린리모델링 이자지원",
++    kind: "공고",
++    article: "대출 한도",
++    title: "건축물 유형별 대출 한도와 상환 기간",
++    chapter: null,
++    effectiveDate: "20260317",
++    text:
++      "대출 한도는 공동주택 3,000만원, 단독주택 1억원, 비주거 건축물 200억원(종전 50억원에서 상향)이다. 상환 기간은 주거 최대 5년, 비주거 최대 10년(거치 3년 포함)이다. 단독주택은 간이평가표로 개선률을 판단할 수 있다.",
++    url: INTEREST_SUPPORT_URL,
++  },
++  {
++    id: "2026 민간 그린리모델링 이자지원|절차",
++    source: "2026 민간 그린리모델링 이자지원",
++    kind: "공고",
++    article: "신청 절차",
++    title: "신청부터 대출까지",
++    chapter: null,
++    effectiveDate: "20260317",
++    text:
++      "그린리모델링 창조센터에 온라인으로 신청해 사업확인서를 받고, 선정한 시공사로 공사를 마친 뒤 사업완료확인서를 받아 최종 대출을 받는다. 정부는 지원율만큼의 이자를 대출 은행에 직접 지급한다. 창조센터는 사전진단, 절감효과 분석, 개선방안 제시 등 무상 컨설팅을 제공한다.",
++    url: INTEREST_SUPPORT_URL,
++  },
++  {
++    id: "2026 공공건축물 그린리모델링 2.0|대상과 국비",
++    source: "2026 공공건축물 그린리모델링 2.0",
++    kind: "지침",
++    article: "대상과 국비",
++    title: "지원 대상 용도와 국비 지원 비율",
++    chapter: null,
++    effectiveDate: "2026",
++    text:
++      "도서관, 유치원, 평생교육시설, 노인복지시설 등 28개 지정 용도의 공공건축물 가운데 사용승인 후 10년 이상(2016년 1월 1일 이전 사용승인)인 건축물이 대상이다. 국비 지원 비율은 서울·중앙행정기관·공공기관 50%, 그 밖의 지방자치단체 70%이며 총사업비는 1,688억원이다.",
++    url: PUBLIC_GR_GUIDE_URL,
++  },
++];
+diff --git a/src/lib/law-advisor.ts b/src/lib/law-advisor.ts
+new file mode 100644
+index 0000000..e8f4601
+--- /dev/null
++++ b/src/lib/law-advisor.ts
+@@ -0,0 +1,200 @@
++/**
++ * 검색형 AI 상담(/api/advisor)의 공용 타입과 규칙 계산.
++ *
++ * 역할 분담:
++ *  - 숫자(절감률 누적, 이자지원 요건 판정, 최소 조합)는 여기서 결정적으로 계산한다.
++ *  - Gemini 는 근거 조문을 골라 쉬운 말로 설명하는 일만 한다.
++ * 이렇게 나눠야 AI 가 숫자를 지어내도 화면 숫자가 틀어지지 않는다.
++ *
++ * 브라우저에서도 import 하므로 Node 전용 모듈을 쓰지 않는다.
++ */
++import { REMODEL_MEASURES } from "@/src/lib/remodel-report";
++
++export type MeasureCode = (typeof REMODEL_MEASURES)[number]["code"];
++export type AdvisorAudience = "owner" | "tenant";
++
++/** 등급을 어떤 수준으로 말할 수 있는지 — 상담 문구의 단정 수위를 정한다. */
++export type GradeStatus = "certified" | "estimated" | "range" | "refused" | "unknown";
++
++export interface AdvisorBuilding {
++  name: string;
++  useType: string;
++  completionYear: number | null;
++  insulationEra: string | null;
++  heatingType: string | null;
++  /** 화면에 보이는 그대로, 예: "1등급", "1~3등급 범위". 말할 수 없으면 `null`. */
++  gradeLabel: string | null;
++  gradeStatus: GradeStatus;
++  primaryEnergyKwh: number | null;
++}
++
++export interface AdvisorRequest {
++  question: string;
++  building: AdvisorBuilding;
++  audience: AdvisorAudience;
++}
++
++export interface AdvisorCitation {
++  id: string;
++  source: string;
++  kind: string;
++  article: string;
++  title: string | null;
++  url: string;
++  /** 조문 앞부분 — 카드에서 바로 확인하라고. */
++  excerpt: string;
++}
++
++export interface AdvisorAction {
++  code: MeasureCode;
++  title: string;
++  reductionPct: number;
++  /** 1(적음) ~ 3(큼). 공사 규모의 상대 비교용. */
++  costLevel: 1 | 2 | 3;
++  reason: string;
++  /** 이 사용자가 혼자 결정할 수 없는 이유, 예: "단지 합의 필요". */
++  needs: string | null;
++  citationIds: string[];
++}
++
++export interface SubsidyCheck {
++  /** 고른 조치를 모두 했을 때 1차에너지소요량 감소율(%) — 곱으로 누적. */
++  reductionPercent: number;
++  tier: "preferred" | "general" | "below";
++  label: string;
++}
++
++export interface AdvisorResponse {
++  source: "gemini" | "fallback";
++  answer: string;
++  actions: AdvisorAction[];
++  subsidy: SubsidyCheck | null;
++  /** 이자지원 요건(20%·30%)에 닿는 가장 적은 조치 조합. 닿을 수 없으면 `null`. */
++  minimalCombos: { general: MeasureCode[] | null; preferred: MeasureCode[] | null };
++  citations: AdvisorCitation[];
++  caution: string;
++  /** 법령 원문을 받은 시각. 법령 코퍼스가 없으면 `null`. */
++  lawAsOf: string | null;
++  fallbackReason?: string;
++}
++
++/** 공사 규모 — beec `Measure` 의 비용등급과 같은 값. */
++export const COST_LEVEL: Record<MeasureCode, 1 | 2 | 3> = {
++  WAL: 3,
++  WIN: 3,
++  HRV: 2,
++  BOI: 2,
++  ROF: 2,
++  LED: 1,
++};
++
++/** 2026 민간 그린리모델링 이자지원: 20% 이상 일반 4.5%, 30% 이상 우대 5.5%. */
++export const SUBSIDY_GENERAL_PCT = 20;
++export const SUBSIDY_PREFERRED_PCT = 30;
++
++const MEASURE_BY_CODE = new Map(REMODEL_MEASURES.map((m) => [m.code as MeasureCode, m]));
++
++export function measureTitle(code: MeasureCode): string {
++  return MEASURE_BY_CODE.get(code)?.title ?? code;
++}
++
++const isApartment = (useType: string) => /공동주택|아파트/.test(useType);
++
++/**
++ * 이 건물·사용자에게 의미 있는 조치만 남긴다.
++ *  - 지역난방·중앙난방이면 세대에 보일러가 없으므로 보일러 교체를 뺀다.
++ * 그리고 혼자 결정할 수 없는 조치에는 이유를 붙인다.
++ *  - 공동주택의 외벽·지붕은 공용부라 단지(입주자대표회의) 합의가 필요하다.
++ *  - 임차인은 공사가 필요한 조치를 집주인 동의 없이 할 수 없다.
++ */
++export function eligibleMeasures(building: AdvisorBuilding, audience: AdvisorAudience) {
++  const heating = building.heatingType ?? "";
++  const noOwnBoiler = /지역|중앙/.test(heating);
++  return REMODEL_MEASURES.filter((m) => !(m.code === "BOI" && noOwnBoiler)).map((m) => {
++    const code = m.code as MeasureCode;
++    let needs: string | null = null;
++    if (isApartment(building.useType) && (code === "WAL" || code === "ROF")) needs = "단지 합의 필요(공용부)";
++    else if (audience === "tenant" && code !== "LED") needs = "집주인 동의 필요";
++    return { code, title: m.title, reductionPct: m.reductionPct as number, costLevel: COST_LEVEL[code], needs };
++  });
++}
++
++/** 절감률은 더하지 않고 곱한다: 남는 비율 = Π(1 − r). 더하면 과대추정된다. */
++export function combinedReduction(codes: MeasureCode[]): number {
++  const remain = codes.reduce((acc, code) => acc * (1 - (MEASURE_BY_CODE.get(code)?.reductionPct ?? 0) / 100), 1);
++  return Math.round((1 - remain) * 1000) / 10;
++}
++
++export function subsidyCheck(codes: MeasureCode[]): SubsidyCheck | null {
++  if (codes.length === 0) return null;
++  const reductionPercent = combinedReduction(codes);
++  if (reductionPercent >= SUBSIDY_PREFERRED_PCT) {
++    return { reductionPercent, tier: "preferred", label: "이자지원 우대(5.5%) 개선률 기준 이상" };
++  }
++  if (reductionPercent >= SUBSIDY_GENERAL_PCT) {
++    return { reductionPercent, tier: "general", label: "이자지원 일반(4.5%) 개선률 기준 이상" };
++  }
++  return { reductionPercent, tier: "below", label: "이자지원 개선률 기준(20%) 미만" };
++}
++
++/**
++ * 기준에 닿는 가장 작은 조합. 조치가 6개뿐이라 모든 부분집합(64개)을 본다.
++ * 고르는 순서: 혼자 결정할 수 없는 조치(단지 합의·집주인 동의)가 적은 것 →
++ * 조치 수가 적은 것 → 공사 규모 합이 작은 것 → 감소율이 큰 것.
++ * 아파트 세대라면 외벽보다 창호 조합이 먼저 나오는 이유다.
++ */
++export function minimalCombos(measures: { code: MeasureCode; needs: string | null }[]): AdvisorResponse["minimalCombos"] {
++  type Combo = { set: MeasureCode[]; blocked: number; cost: number; red: number };
++  const better = (a: Combo, b: Combo | null) => {
++    if (!b) return true;
++    if (a.blocked !== b.blocked) return a.blocked < b.blocked;
++    if (a.set.length !== b.set.length) return a.set.length < b.set.length;
++    if (a.cost !== b.cost) return a.cost < b.cost;
++    return a.red > b.red;
++  };
++  let general: Combo | null = null;
++  let preferred: Combo | null = null;
++
++  for (let mask = 1; mask < 1 << measures.length; mask += 1) {
++    const picked = measures.filter((_, i) => mask & (1 << i));
++    const set = picked.map((m) => m.code);
++    const red = combinedReduction(set);
++    const cand: Combo = {
++      set,
++      blocked: picked.filter((m) => m.needs).length,
++      cost: set.reduce((sum, c) => sum + COST_LEVEL[c], 0),
++      red,
++    };
++    if (red >= SUBSIDY_GENERAL_PCT && better(cand, general)) general = cand;
++    if (red >= SUBSIDY_PREFERRED_PCT && better(cand, preferred)) preferred = cand;
++  }
++  const g = general as Combo | null;
++  const p = preferred as Combo | null;
++  return { general: g?.set ?? null, preferred: p?.set ?? null };
++}
++
++/** 질문에 나온 생활어로 조치 우선순위를 정한다 — Gemini 가 없을 때의 규칙 기반 답에서 쓴다. */
++const QUESTION_HINTS: [RegExp, MeasureCode[]][] = [
++  [/창|유리|샷시|섀시|외풍|웃풍|결로/, ["WIN"]],
++  [/벽|추워|춥/, ["WAL", "WIN"]],
++  [/지붕|옥상|최상층|꼭대기/, ["ROF"]],
++  [/보일러|난방비|가스/, ["BOI"]],
++  [/환기|공기|답답/, ["HRV"]],
++  [/조명|전등|형광등|전기/, ["LED"]],
++];
++
++export function rankByQuestion(question: string, codes: MeasureCode[]): MeasureCode[] {
++  const hinted = QUESTION_HINTS.filter(([re]) => re.test(question)).flatMap(([, list]) => list);
++  // 질문에 먼저 걸린 조치가 절감률 차이보다 앞서도록 순위 간격을 크게 둔다.
++  const score = (c: MeasureCode) =>
++    (hinted.includes(c) ? 1000 - 100 * hinted.indexOf(c) : 0) + (MEASURE_BY_CODE.get(c)?.reductionPct ?? 0);
++  return [...codes].sort((a, b) => score(b) - score(a));
++}
++
++/** 상담 화면의 예시 질문. 시연 시나리오와 맞춘다. */
++export const EXAMPLE_QUESTIONS = [
++  "겨울에 창가가 너무 추워요. 무엇부터 하면 좋을까요?",
++  "관리비를 줄이려면 어떤 공사가 효과적인가요?",
++  "그린리모델링 이자지원을 받을 수 있나요?",
++  "그린리모델링은 법적으로 무엇을 말하나요?",
++] as const;
+diff --git a/src/lib/law-search.ts b/src/lib/law-search.ts
+new file mode 100644
+index 0000000..1d46a48
+--- /dev/null
++++ b/src/lib/law-search.ts
+@@ -0,0 +1,162 @@
++import { readFileSync } from "node:fs";
++import path from "node:path";
++import { POLICY_FACTS } from "@/src/data/policy-facts";
++
++/**
++ * 검색형 AI 상담의 검색 단계 — 법령 조문과 공고 사실 가운데 질문에 맞는 것을 고른다.
++ *
++ * 왜 임베딩이 아니라 BM25 인가:
++ *  - 조문 수백 개 규모라 외부 호출 없이 메모리에서 끝난다(발표장 네트워크와 무관, 응답 즉시).
++ *  - 같은 질문이면 같은 근거가 나온다(재현 가능) — 심사에서 "왜 이 조문인가"를 설명할 수 있다.
++ * 한국어는 띄어쓰기·조사 때문에 단어 단위가 불안정해, 공백을 뺀 글자 2-gram 으로 색인한다.
++ */
++
++export interface LawChunk {
++  /** `<문서명>|<조문>` — Gemini 가 인용할 때 이 값을 그대로 돌려줘야 한다. */
++  id: string;
++  source: string;
++  /** 법률 · 대통령령 · 국토교통부령 · 고시 · 공고 · 지침 */
++  kind: string;
++  article: string;
++  title: string | null;
++  chapter: string | null;
++  effectiveDate: string | null;
++  text: string;
++  url: string;
++}
++
++export interface LawHit extends LawChunk {
++  score: number;
++}
++
++interface CorpusFile {
++  generatedAt: string;
++  chunks: LawChunk[];
++}
++
++const CORPUS_PATH = path.join(process.cwd(), "src", "data", "law-corpus.json");
++
++/**
++ * 질문에 자주 나오는 생활어를 법령·기준에서 쓰는 말로 넓힌다.
++ * 사용자는 "창가가 추워요" 라고 묻지만 조문에는 "창호", "단열", "열관류율" 이 나온다.
++ */
++const SYNONYMS: [RegExp, string][] = [
++  [/추워|춥|외풍|웃풍|찬바람|결로|곰팡/, "단열 창호 열관류율 기밀 에너지성능"],
++  [/창|유리|샷시|섀시/, "창호 창 열관류율"],
++  [/벽|외벽/, "외벽 단열재 열관류율"],
++  [/지붕|옥상|최상층/, "지붕 최상층 단열"],
++  [/보일러|난방|가스/, "난방 설비 보일러 효율"],
++  [/환기|공기/, "환기 열회수 설비"],
++  [/조명|전등|형광등|LED/i, "조명 LED 전기"],
++  [/관리비|요금|비용|돈|절약|아끼/, "에너지 절약 절감 효율 개선"],
++  [/지원|보조|대출|이자|융자|돈|신청/, "지원 그린리모델링 보조금 금융 이자지원 신청"],
++  [/등급|인증|성적/, "에너지효율등급 인증 에너지성능"],
++  [/리모델링|공사|고치|개선/, "그린리모델링 리모델링 에너지 성능향상 개선"],
++  [/탄소|온실가스|환경/, "온실가스 감축 에너지"],
++  [/공공|어린이집|도서관|경로당|복지/, "공공건축물 그린리모델링"],
++];
++
++const K1 = 1.4;
++const B = 0.75;
++
++function bigrams(text: string): string[] {
++  const s = text.replace(/[\s\p{P}\p{S}]+/gu, "").toLowerCase();
++  const out: string[] = [];
++  for (let i = 0; i < s.length - 1; i += 1) out.push(s.slice(i, i + 2));
++  return out;
++}
++
++interface Index {
++  chunks: LawChunk[];
++  tf: Map<string, number>[];
++  lengths: number[];
++  avgLength: number;
++  df: Map<string, number>;
++  generatedAt: string | null;
++}
++
++let cached: Index | null = null;
++
++function loadLawChunks(): { chunks: LawChunk[]; generatedAt: string | null } {
++  try {
++    const file = JSON.parse(readFileSync(CORPUS_PATH, "utf8")) as CorpusFile;
++    return { chunks: Array.isArray(file.chunks) ? file.chunks : [], generatedAt: file.generatedAt ?? null };
++  } catch {
++    // 아직 `node scripts/fetch-laws.mjs` 를 돌리지 않았다 — 공고 사실만으로 동작한다.
++    return { chunks: [], generatedAt: null };
++  }
++}
++
++/** 색인은 처음 검색할 때 한 번만 만든다. 조문·공고는 실행 중에 바뀌지 않는다. */
++function getIndex(): Index {
++  if (cached) return cached;
++  const { chunks: lawChunks, generatedAt } = loadLawChunks();
++  const chunks = [...lawChunks, ...POLICY_FACTS];
++  const tf: Map<string, number>[] = [];
++  const lengths: number[] = [];
++  const df = new Map<string, number>();
++
++  for (const chunk of chunks) {
++    // 조문 제목·장 제목은 본문보다 주제를 잘 말해 주므로 한 번 더 넣어 가중치를 준다.
++    const grams = bigrams(`${chunk.source} ${chunk.chapter ?? ""} ${chunk.title ?? ""} ${chunk.title ?? ""} ${chunk.text}`);
++    const counts = new Map<string, number>();
++    for (const g of grams) counts.set(g, (counts.get(g) ?? 0) + 1);
++    for (const g of counts.keys()) df.set(g, (df.get(g) ?? 0) + 1);
++    tf.push(counts);
++    lengths.push(grams.length);
++  }
++
++  const avgLength = lengths.length ? lengths.reduce((a, b) => a + b, 0) / lengths.length : 1;
++  cached = { chunks, tf, lengths, avgLength, df, generatedAt };
++  return cached;
++}
++
++/** 생활어 질문을 조문 어휘로 넓힌 검색어. */
++export function expandQuery(question: string, contextTerms: string[]): string {
++  const extra = SYNONYMS.filter(([re]) => re.test(question)).map(([, words]) => words);
++  return [question, ...extra, ...contextTerms].join(" ");
++}
++
++/**
++ * 상위 `limit` 개 조문. 같은 조문이 길어 여러 조각이면 가장 높은 조각 하나만 남긴다.
++ * 점수가 0인 조문(겹치는 글자 쌍이 없음)은 근거가 될 수 없으므로 돌려주지 않는다.
++ */
++export function searchLaw(query: string, limit = 8): LawHit[] {
++  const index = getIndex();
++  const n = index.chunks.length;
++  if (n === 0) return [];
++
++  const qGrams = [...new Set(bigrams(query))];
++  const scored: LawHit[] = [];
++
++  index.chunks.forEach((chunk, i) => {
++    const counts = index.tf[i];
++    const len = index.lengths[i];
++    let score = 0;
++    for (const g of qGrams) {
++      const f = counts.get(g);
++      if (!f) continue;
++      const df = index.df.get(g) ?? 0;
++      const idf = Math.log(1 + (n - df + 0.5) / (df + 0.5));
++      score += idf * ((f * (K1 + 1)) / (f + K1 * (1 - B + (B * len) / index.avgLength)));
++    }
++    if (score > 0) scored.push({ ...chunk, score });
++  });
++
++  scored.sort((a, b) => b.score - a.score);
++  const seen = new Set<string>();
++  const out: LawHit[] = [];
++  for (const hit of scored) {
++    const key = `${hit.source}|${hit.article}`;
++    if (seen.has(key)) continue;
++    seen.add(key);
++    out.push(hit);
++    if (out.length >= limit) break;
++  }
++  return out;
++}
++
++/** 상담 카드에 "법령 기준일" 을 보여 주려고. 코퍼스가 없으면 `null`. */
++export function lawCorpusGeneratedAt(): string | null {
++  return getIndex().generatedAt;
++}

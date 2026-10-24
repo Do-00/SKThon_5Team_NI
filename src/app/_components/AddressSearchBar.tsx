@@ -16,8 +16,11 @@ export interface AddressSearchBarProps {
 }
 
 type ScriptStatus = "loading" | "ready" | "error";
-/** `search`: Kakao embed. `checklist`: apartment picked, asking follow-up questions. `rejected`: a non-apartment address was picked. */
-type DialogStep = "search" | "checklist" | "rejected";
+/** `search`: Kakao embed. `checklist`: apartment picked, asking follow-up questions. */
+type DialogStep = "search" | "checklist";
+
+/** 아파트가 아닌 건물은 추가 질문 없이 바로 건축물대장으로 찾는다. */
+const NO_CHECKLIST: ApartmentChecklistAnswers = { completionYear: null, builder: "", heatingType: null };
 
 /**
  * White raised panel used by the home hero and `/search`'s `SearchBar`:
@@ -68,13 +71,20 @@ export function AddressSearchBar({ value = "", onSelect, submitLabel = "등급 �
       embedKakaoPostcode(
         element,
         (data) => {
-          setPickedData(data);
-          setStep(data.apartment === "Y" ? "checklist" : "rejected");
+          if (data.apartment === "Y") {
+            setPickedData(data);
+            setStep("checklist");
+            return;
+          }
+          // 상가·사무실·학교·주택 등 모든 건물: 체크리스트 없이 바로 조회한다.
+          setDialogOpen(false);
+          setStep("search");
+          onSelect(data, NO_CHECKLIST);
         },
         { q: value || undefined },
       );
     },
-    [value],
+    [value, onSelect],
   );
 
   function handleChecklistSubmit(answers: ApartmentChecklistAnswers) {
@@ -145,16 +155,6 @@ export function AddressSearchBar({ value = "", onSelect, submitLabel = "등급 �
       >
         {step === "checklist" && pickedData ? (
           <ApartmentChecklistStep data={pickedData} onBack={retrySearch} onSubmit={handleChecklistSubmit} />
-        ) : step === "rejected" ? (
-          <div className="flex flex-col items-center gap-[var(--space-4)] py-[var(--space-8)] text-center">
-            <Icon name="building" size={32} className="text-[var(--text-muted)]" />
-            <p className="text-[length:var(--text-body-size)] leading-[1.6] break-keep text-[var(--text-body)]">
-              지금은 아파트 주소만 지원해요. 다른 주소로 다시 검색해 주세요.
-            </p>
-            <Button variant="primary" onClick={retrySearch}>
-              다시 검색하기
-            </Button>
-          </div>
         ) : (
           <div key={embedKey} ref={embedContainerRef} className="h-[min(470px,60vh)] w-full" />
         )}

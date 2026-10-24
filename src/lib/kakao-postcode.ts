@@ -32,6 +32,10 @@ export interface KakaoPostcodeData {
   sigungu: string;
   /** 법정동/법정리 name, e.g. `"상암동"`. */
   bname: string;
+  /** 법정동코드 10자리 (시군구 5 + 읍면동 5). 건축물대장 조회 키. */
+  bcode?: string;
+  /** 시군구코드 5자리. */
+  sigunguCode?: string;
   roadname: string;
   /** What the user typed into the popup's search box. */
   query: string;

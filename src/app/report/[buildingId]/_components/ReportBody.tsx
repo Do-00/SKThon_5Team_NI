@@ -2,7 +2,9 @@
 
 import { useEffect, useState } from "react";
 import type { ReactNode } from "react";
+import { AiLawAdvisor } from "@/src/components/domain/AiLawAdvisor";
 import { AiRemodelReport, type AiRemodelReportProps } from "@/src/components/domain/AiRemodelReport";
+import type { AdvisorBuilding } from "@/src/lib/law-advisor";
 import { Badge, ButtonLink, Card, Icon } from "@/src/components/ui";
 import { getExampleEnergyCost } from "@/src/data/energy-cost";
 import { fetchEnergyCost } from "@/src/lib/eco-api";
@@ -36,6 +38,18 @@ export interface ReportBodyProps {
    * 생략하면 배출량이 두 배 넘게 부풀려집니다.
    */
   heatingType?: string;
+  /**
+   * 신뢰도 게이트가 추정을 거절한 경우. 비용·탄소 같은 파생 숫자는 1차에너지소요량이
+   * 없으면 만들 수 없으므로, 그 자리에 거절 사유와 확인된 사실을 보여 준다.
+   */
+  refusal?: { reason?: string; points: string[] } | null;
+  /** 검색형 AI 상담에 넘길 건물 정보. 없으면 상담 카드를 그리지 않는다. */
+  advisor?: AdvisorBuilding;
+  /**
+   * 개요(등급·건물 정보) 바로 아래에 둘 카드. 비주거 건물은 설계 기준 등급보다 실제로 쓴 에너지가
+   * 더 중요한 정보라, 실사용량 카드를 AI 리포트보다 먼저 보여 준다.
+   */
+  afterOverview?: ReactNode;
   /** Rendered between the AI remodel report and the savings card (the grade scale). */
   children?: ReactNode;
 }
@@ -53,6 +67,9 @@ export function ReportBody({
   fetchLiveMetrics,
   areaSqm,
   heatingType,
+  refusal = null,
+  advisor,
+  afterOverview,
   children,
 }: ReportBodyProps) {
   const [metrics, setMetrics] = useState<ReportMetrics | null>(initialMetrics);
@@ -84,6 +101,8 @@ export function ReportBody({
     <>
       <ReportOverview {...overview} metrics={metrics} />
 
+      {afterOverview}
+
       {ready ? (
         <AiRemodelReport
           {...remodel}
@@ -91,6 +110,9 @@ export function ReportBody({
           onResult={(result) => setRemodelSavings(result.data.annualSavingsManwon)}
         />
       ) : null}
+
+      {/* 추정 보류 단지도 상담은 받을 수 있다 — 등급 대신 법령·지원 요건으로 다음 행동을 안내한다. */}
+      {advisor ? <AiLawAdvisor building={advisor} /> : null}
 
       {children}
 
@@ -117,6 +139,36 @@ export function ReportBody({
           <ButtonLink href={`/guide/${buildingId}`} size="lg" trailingIcon={<Icon name="arrow-right" size={22} />}>
             절감 하기 보기
           </ButtonLink>
+        </Card>
+      ) : refusal ? (
+        <Card tone="sunken" padding="lg" className="flex flex-col items-start gap-[var(--space-4)]">
+          <Badge tone="caution">등급 추정 보류</Badge>
+          <div className="flex flex-col gap-[var(--space-2)]">
+            <h2 className="eco-heading">이 건물은 등급을 말하지 않습니다</h2>
+            <p className="max-w-[var(--width-reading)] text-[length:var(--text-body-size)] text-[var(--text-muted)]">
+              같은 시기에 지어진 건물의 인증·검증 사례가 부족해, 등급을 말하면 한 칸 이상 틀릴 수 있어요. 틀릴 수
+              있는 등급 대신 확인된 사실만 보여 드려요.
+              {refusal.reason ? ` (사유: ${refusal.reason})` : ""}
+            </p>
+          </div>
+          {refusal.points.length > 0 ? (
+            <ul className="flex flex-col gap-[var(--space-2)] text-[length:var(--text-body-size)] text-[var(--text-body)]">
+              {refusal.points.map((point) => (
+                <li key={point} className="flex gap-2">
+                  <span aria-hidden className="text-[var(--teal-600)]">·</span>
+                  <span>{point}</span>
+                </li>
+              ))}
+            </ul>
+          ) : null}
+          <div className="flex flex-wrap gap-[var(--space-3)]">
+            <ButtonLink href={`/guide/${buildingId}`} variant="primary">
+              개선 방법 보기
+            </ButtonLink>
+            <ButtonLink href="/programs" variant="ghost">
+              지원사업 보기
+            </ButtonLink>
+          </div>
         </Card>
       ) : (
         <Card tone="sunken" padding="lg" className="flex flex-col items-start gap-[var(--space-4)]">

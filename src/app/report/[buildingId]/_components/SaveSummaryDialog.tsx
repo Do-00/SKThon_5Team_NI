@@ -135,7 +135,7 @@ export function SaveSummaryDialog({
           <p className="text-[13px] text-[var(--text-muted)]">
             {annualSavingsPotentialManwon
               ? `권장 조치를 모두 실천하면 연간 최대 ${formatManwon(annualSavingsPotentialManwon)} 절감`
-              : "절감 하기에서 우리 집에 맞는 실천 항목을 확인해보세요"}
+              : "절감 하기에서 이 건물에 맞는 실천 항목을 확인해보세요"}
           </p>
         </div>
       </div>

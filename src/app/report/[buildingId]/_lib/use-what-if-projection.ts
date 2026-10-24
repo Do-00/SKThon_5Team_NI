@@ -39,11 +39,12 @@ export function useWhatIfProjection(
     [actions],
   );
   const localResult = useMemo(
-    () => (actions.length > 0 ? simulateWhatIfLocally(primaryEnergyKwh, realGrade, actions) : null),
+    // 1차에너지소요량이 없으면(추정 보류) 개선 후를 계산할 기준이 없다 — 지어내지 않는다.
+    () => (actions.length > 0 && primaryEnergyKwh > 0 ? simulateWhatIfLocally(primaryEnergyKwh, realGrade, actions) : null),
     [actions, primaryEnergyKwh, realGrade],
   );
 
-  const requestKey = measureCodes.length > 0 ? `${primaryEnergyKwh}|${measureCodes.join(",")}|${useType}` : null;
+  const requestKey = measureCodes.length > 0 && primaryEnergyKwh > 0 ? `${primaryEnergyKwh}|${measureCodes.join(",")}|${useType}` : null;
   const [remote, setRemote] = useState<{ key: string; result: WhatIfResult } | null>(null);
 
   useEffect(() => {

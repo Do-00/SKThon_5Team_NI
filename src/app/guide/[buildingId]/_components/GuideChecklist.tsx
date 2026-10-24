@@ -10,11 +10,12 @@ import { ButtonLink, Card, Icon, Notice, RadioGroup } from "@/src/components/ui"
 import { mapSimulateResponse, simulateWhatIfLocally, type WhatIfResult } from "@/src/lib/what-if";
 import { useChecklistStorage } from "@/src/lib/checklist-storage";
 import {
-  AUDIENCE_OPTIONS,
+  audienceOptionsFor,
   DEFAULT_GUIDE_FILTER_STATE,
   filterActions,
   sortByRecommendedRemodel,
   type AudienceFilter,
+  type BuildingKind,
   type GuideFilterState,
 } from "../_lib/guide-filters";
 import { WhatIfSimulator } from "./WhatIfSimulator";
@@ -24,6 +25,8 @@ export interface GuideChecklistProps {
   actions: EcoAction[];
   currentGrade: GradeCode;
   currentPrimaryEnergyKwh: number;
+  /** 주거/비주거 — 사용자 유형 목록과 시뮬레이션 등급 기준표가 달라진다. */
+  buildingKind?: BuildingKind;
 }
 
 /**
@@ -37,6 +40,7 @@ export function GuideChecklist({
   actions,
   currentGrade,
   currentPrimaryEnergyKwh,
+  buildingKind = "residential",
 }: GuideChecklistProps) {
   const [filters, setFilters] = useState<GuideFilterState>(DEFAULT_GUIDE_FILTER_STATE);
   const { completed, toggle, hydrated } = useChecklistStorage(buildingId);
@@ -77,7 +81,7 @@ export function GuideChecklist({
     const params = new URLSearchParams({
       baseEnergy: String(currentPrimaryEnergyKwh),
       measures: measureCodes.join(","),
-      purpose: "주거용",
+      purpose: buildingKind === "residential" ? "주거용" : "주거용 이외",
     });
 
     fetch(`/api/simulate?${params.toString()}`)
@@ -114,7 +118,7 @@ export function GuideChecklist({
           onValueChange={(value) =>
             setFilters((current) => ({ ...current, audience: value as AudienceFilter }))
           }
-          options={AUDIENCE_OPTIONS}
+          options={audienceOptionsFor(buildingKind)}
         />
       </Card>
 
@@ -149,7 +153,13 @@ export function GuideChecklist({
 
         {filters.audience === "tenant" ? (
           <Notice tone="info" role="status">
-            임차인은 공사가 필요한 조치를 직접 신청할 수 없습니다. 소유주와 함께 신청하는 사업을 확인해 보세요.
+            {buildingKind === "residential" ? "임차인" : "입주 사업자"}은 공사가 필요한 조치를 직접 신청할 수 없습니다.{" "}
+            {buildingKind === "residential" ? "소유주" : "건물주"}와 함께 신청하는 사업을 확인해 보세요.
+          </Notice>
+        ) : filters.audience === "hoa" ? (
+          <Notice tone="info" role="status">
+            외벽·지붕 단열은 공용부 공사라 입주자 동의가 필요해요. 그린리모델링 창조센터의 무상 사전진단으로 단지 전체의
+            개선 효과를 먼저 확인하면 동의를 구하기 쉬워요.
           </Notice>
         ) : null}
 

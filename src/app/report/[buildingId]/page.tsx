@@ -5,7 +5,13 @@ import { Card, Notice } from "@/src/components/ui";
 import { GradeScale } from "@/src/components/domain";
 import { DistrictMap } from "@/src/components/domain/DistrictMap";
 import districtCoords from "@/src/data/district-coords.json";
-import { getBuildingById, type ApartmentReportInfo, type BuildingSummary, type LiveMatchInfo } from "@/src/data/buildings";
+import {
+  getBuildingById,
+  type ApartmentReportInfo,
+  type BuildingSummary,
+  type GeneralBuildingInfo,
+  type LiveMatchInfo,
+} from "@/src/data/buildings";
 import type { ApartmentDetail, ReportEstimate } from "@/src/lib/beec-client";
 import { getEcoCheckReport } from "@/src/data/account";
 import { PRIMARY_ENERGY_UNIT } from "@/src/data/grades";
@@ -14,6 +20,8 @@ import { getDistrict } from "@/src/lib/audience";
 import { HEATING_TYPE_OPTIONS, readApartmentChecklistParams } from "@/src/lib/apartment-checklist";
 import type { BasisRow } from "./_components/ReportOverview";
 import { ReportBody } from "./_components/ReportBody";
+import { EnergyUsageCard } from "./_components/EnergyUsageCard";
+import type { AdvisorBuilding } from "@/src/lib/law-advisor";
 
 /** `?bn=` carries the Kakao 건물명 on older links whose id doesn't have it packed in. */
 function readBuildingName(raw: string | string[] | undefined): string | undefined {
@@ -218,6 +226,43 @@ function buildRawBasisRows(building: BuildingSummary): BasisRow[] | null {
   return null;
 }
 
+/** 전체 건축물 — 건축물대장 표제부 값과 등급 판단 근거. 없는 값은 행을 만들지 않는다. */
+function buildGeneralBasisRows(info: GeneralBuildingInfo): BasisRow[] {
+  const { facts, judgement } = info;
+  const rows: BasisRow[] = [
+    { icon: "building", label: "주용도", value: facts.use },
+  ];
+  if (facts.year !== null) rows.push({ icon: "calendar", label: "사용승인", value: `${facts.year}년 (${new Date().getFullYear() - facts.year}년 경과)` });
+  if (facts.area) rows.push({ icon: "home", label: "연면적", value: `${formatNumber(Math.round(facts.area))}㎡` });
+  rows.push({
+    icon: "building",
+    label: "층수",
+    value: `지상 ${facts.floors}층${facts.underFloors ? ` · 지하 ${facts.underFloors}층` : ""}`,
+  });
+  if (facts.structure) rows.push({ icon: "hammer", label: "구조", value: facts.structure });
+  if (facts.households) rows.push({ icon: "users", label: "세대수", value: `${formatNumber(facts.households)}세대` });
+
+  if (judgement.policy === "certified") {
+    rows.push({ icon: "badge-check", label: "에너지효율등급", value: `${judgement.gradeBest}등급 (건축물대장 기재)` });
+  } else if (judgement.policy === "range") {
+    rows.push({
+      icon: "gauge",
+      label: "추정 등급 범위",
+      value: judgement.gradeBest === judgement.gradeWorst ? `${judgement.gradeBest}등급 수준` : `${judgement.gradeBest} ~ ${judgement.gradeWorst}등급`,
+    });
+    rows.push({ icon: "users", label: "비교한 인증 건물", value: `${formatNumber(judgement.peerCount)}곳` });
+    if (judgement.scope) rows.push({ icon: "map-pin", label: "비교 범위", value: judgement.scope });
+  } else if (judgement.reason) {
+    rows.push({ icon: "triangle-alert", label: "추정 보류 사유", value: judgement.reason });
+  }
+  rows.push({
+    icon: "file-text",
+    label: "데이터 출처",
+    value: facts.dataSource === "pilot" ? "건축물대장(건축HUB) · 건물에너지정보" : "건축물대장(건축HUB)",
+  });
+  return rows;
+}
+
 /** Rows for the "직접 입력한 집 정보" card — from the home hero's apartment checklist, via query params. */
 function buildChecklistRows(checklist: NonNullable<ReturnType<typeof readApartmentChecklistParams>>): BasisRow[] {
   const rows: BasisRow[] = [];
@@ -257,6 +302,45 @@ export default async function ReportPage({ params, searchParams }: PageProps<"/r
   const isEstimated = building.gradeSource === "estimated";
   const live = building.liveMatch;
   const estimate = building.estimate;
+  // 신뢰도 게이트가 추정을 거절한 단지 — building.grade는 자리만 채운 값이라 화면에 쓰지 않는다.
+  const general = building.general;
+  const gradeUnknown = building.apartment?.source === "unknown" || general?.judgement.policy === "refuse";
+  const generalCaption =
+    general?.judgement.policy === "range"
+      ? general.judgement.gradeBest === general.judgement.gradeWorst
+        ? "추정 등급 (인증 비교)"
+        : `추정 범위 ${general.judgement.gradeBest}~${general.judgement.gradeWorst}등급`
+      : undefined;
+
+  /**
+   * 검색형 AI 상담에 넘길 건물 정보. 등급은 화면에 보이는 수준 그대로 넘겨,
+   * 상담이 추정·범위·보류 등급을 단정하지 않게 한다.
+   */
+  const aptRaw = building.rawSource?.kind === "apt" ? building.rawSource.data : null;
+  const aptSource = building.apartment?.source;
+  const advisorBuilding: AdvisorBuilding = {
+    name: building.name,
+    useType: building.useType,
+    completionYear: building.completionYear ?? null,
+    insulationEra: building.apartment?.insulationEra ?? building.insulationStandard ?? null,
+    heatingType: general ? null : (building.apartment?.heatingType ?? building.heatingType ?? null),
+    gradeLabel: gradeUnknown
+      ? null
+      : aptSource === "estimated-range" && aptRaw?.estimate
+        ? `${aptRaw.estimate.gradeBest}~${aptRaw.estimate.gradeWorst}등급 범위`
+        : general?.judgement.policy === "range"
+          ? `${general.judgement.gradeBest}~${general.judgement.gradeWorst}등급 범위`
+          : `${building.grade}등급`,
+    gradeStatus: gradeUnknown
+      ? "refused"
+      : aptSource === "estimated-range" || general?.judgement.policy === "range"
+        ? "range"
+        : isEstimated
+          ? "estimated"
+          : "certified",
+    primaryEnergyKwh: gradeUnknown || !building.primaryEnergyKwh ? null : building.primaryEnergyKwh,
+    region: general?.sido ?? (building.address.split(" ")[0] || null),
+  };
 
   /**
    * 지도에서 강조할 동네.
@@ -270,7 +354,9 @@ export default async function ReportPage({ params, searchParams }: PageProps<"/r
   const selectedDistrict =
     building.apartment?.sgg ?? live?.district ?? getDistrict(building.address);
 
-  const metaLine = building.apartment
+  const metaLine = general
+    ? [general.facts.jibunAddress.split(" ").slice(1, 3).join(" "), general.facts.use].filter(Boolean).join(" · ")
+    : building.apartment
     ? [[building.apartment.sgg, building.apartment.emd].filter(Boolean).join(" "), "공동주택(아파트)"]
         .filter(Boolean)
         .join(" · ")
@@ -283,7 +369,17 @@ export default async function ReportPage({ params, searchParams }: PageProps<"/r
   return (
     <SiteShell>
       <PageSection className="flex flex-col gap-[var(--space-6)]">
-        {building.apartment?.disclaimer ? (
+        {general ? (
+          general.judgement.policy === "range" ? (
+            <Notice tone="warn">
+              인증 이력이 없어, 같은 용도·비슷한 시기에 인증받은 건물 {formatNumber(general.judgement.peerCount)}곳의 등급
+              분포 가운데 50%를 범위로 보여 드려요. 공식 등급이 아니고, 인증받은 건물은 대체로 성능이 좋은 편이라 실제는
+              이보다 낮을 수 있어요.
+            </Notice>
+          ) : general.judgement.policy === "refuse" ? (
+            <Notice tone="warn">{general.judgement.reason}</Notice>
+          ) : null
+        ) : building.apartment?.disclaimer ? (
           <Notice tone="warn">{building.apartment.disclaimer}</Notice>
         ) : estimate ? (
           <Notice tone="warn">
@@ -308,7 +404,11 @@ export default async function ReportPage({ params, searchParams }: PageProps<"/r
             primaryEnergyKwh: building.primaryEnergyKwh,
             grade: building.grade,
             isEstimated,
-            basisRows:
+            gradeUnknown,
+            gradeCaption: generalCaption,
+            basisRows: general
+              ? buildGeneralBasisRows(general)
+              :
               (isEstimated ? buildRawBasisRows(building) : null) ??
               (building.apartment
                 ? buildApartmentBasisRows(building.apartment, building.primaryEnergyKwh)
@@ -337,12 +437,35 @@ export default async function ReportPage({ params, searchParams }: PageProps<"/r
                 }
               : null
           }
-          fetchLiveMetrics={live !== undefined || estimate !== undefined || building.apartment !== undefined}
+          // 추정 보류 단지는 1차에너지소요량이 없어 비용·탄소를 계산할 수 없다 — 예시값으로 채우지 않는다.
+          fetchLiveMetrics={
+            !gradeUnknown &&
+            (live !== undefined || estimate !== undefined || building.apartment !== undefined || general !== undefined)
+          }
+          refusal={
+            gradeUnknown
+              ? general
+                ? { reason: general.judgement.reason ?? undefined, points: general.whatWeCanSay }
+                : { reason: building.apartment?.disclaimer, points: building.apartment?.whatWeCanSay ?? [] }
+              : null
+          }
           // 연간 에너지 비용·탄소 배출은 1차에너지소요량 × 연면적입니다.
           areaSqm={building.areaSqm}
           // 탄소 배출 계산에 씁니다. 도시가스 난방인데 안 넘기면 전력 계수로 계산돼
           // 배출량이 두 배 넘게 부풀려집니다.
           heatingType={building.apartment?.heatingType ?? building.heatingType}
+          advisor={advisorBuilding}
+          afterOverview={
+          general && (general.gas || general.electric) ? (
+            <EnergyUsageCard
+              gas={general.gas}
+              electric={general.electric}
+              usageGrade={general.facts.usageGrade}
+              totalAnnual={general.facts.totalAnnual}
+              group={general.facts.group}
+            />
+          ) : null
+          }
         >
           {checklist ? (
             <Card padding="lg" className="flex flex-col gap-[var(--space-4)]">
@@ -362,26 +485,51 @@ export default async function ReportPage({ params, searchParams }: PageProps<"/r
             </Card>
           ) : null}
 
+
+
+          {general && general.siblings.length > 1 ? (
+            <Card padding="lg" className="flex flex-col gap-[var(--space-3)]">
+              <SectionHeader title="같은 지번의 다른 건물" hint="한 지번에 건물이 여러 동 있어요. 다른 동을 고를 수 있어요." hintSize="sm" />
+              <ul className="flex flex-wrap gap-[var(--space-2)]">
+                {general.siblings.map((s) => (
+                  <li key={s.id}>
+                    <a
+                      href={`/report/${s.id}`}
+                      aria-current={s.id === building.id ? "page" : undefined}
+                      className="inline-flex rounded-[var(--radius-md)] border border-[var(--border-strong)] px-3 py-2 text-[16px] aria-[current=page]:border-[var(--teal-600)] aria-[current=page]:font-bold"
+                    >
+                      {s.label}
+                    </a>
+                  </li>
+                ))}
+              </ul>
+            </Card>
+          ) : null}
+
           <Card padding="lg" className="flex flex-col gap-[var(--space-4)]">
             <SectionHeader
               title="등급 기준표"
               hint="다른 등급을 누르면 연간 단위면적당 1차에너지소요량을 볼 수 있습니다."
               hintSize="sm"
             />
-            <GradeScale value={building.grade} selectable />
+            <GradeScale value={gradeUnknown ? null : building.grade} selectable />
           </Card>
 
           <Card padding="lg" className="flex flex-col gap-[var(--space-4)]">
             <SectionHeader
               title="동네 비교"
-              hint="같은 용도 건물의 인증 실적을 지역끼리 비교합니다. 회색은 인증 사례가 부족해 등급을 매기지 않은 지역입니다."
+              hint={`${general && !general.judgement.isResidential ? "비주거" : "주거"} 건물의 인증 실적을 지역끼리 비교합니다. 회색은 인증 사례가 부족해 등급을 매기지 않은 지역입니다.`}
               hintSize="sm"
             />
             {/*
-              purpose 는 "주거용" 으로 고정합니다. 백엔드가 아파트 한정으로 좁혀지면서
-              주거용 이외 표본을 걷어냈기 때문에, 다른 값을 넘기면 지도가 빕니다.
+              주거 건물은 주거용, 비주거 건물은 "주거용 이외" 인증 실적끼리 비교합니다.
+              등급 기준표가 달라 두 용도를 한 지도에 섞지 않습니다 (beec SeedDataService 참고).
             */}
-            <DistrictMap coords={districtCoords.districts} selected={selectedDistrict} purpose="주거용" />
+            <DistrictMap
+              coords={districtCoords.districts}
+              selected={selectedDistrict}
+              purpose={general && !general.judgement.isResidential ? "주거용 이외" : "주거용"}
+            />
           </Card>
         </ReportBody>
       </PageSection>

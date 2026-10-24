@@ -51,19 +51,20 @@ export function HomeHero() {
         <div className="flex min-w-0 flex-col gap-[var(--space-6)]">
           <span className="inline-flex items-center gap-1.5 self-start whitespace-nowrap rounded-[var(--radius-pill)] bg-[var(--teal-100)] px-4 py-2 text-[17px] font-bold text-[var(--teal-800)]">
             <Icon name="leaf" size={17} />
-            우리집은 몇등급이지?
+            우리 집·우리 가게는 몇 등급일까?
           </span>
           <h1
             id="home-hero-title"
             className="font-brand text-[40px] font-black leading-[1.15] tracking-[-0.03em] text-white md:text-[56px]"
           >
-            AI로 추적하는
+            AI로 읽는
             <br />
-            우리 집 에너지 성적표
+            건물 에너지 성적표
           </h1>
           {/* break-keep: 한국어는 기본적으로 글자 단위로 줄이 바뀌어 「맞/춤」처럼 단어가 쪼개지므로, 띄어쓰기 단위로만 줄을 바꿉니다. */}
           <p className="max-w-[560px] break-keep text-[20px] font-medium leading-[1.65] text-white md:text-[22px]">
-            인증 이력이 없는 건물도 공공 데이터로 등급을 추정하고, 맞춤 지원사업까지 연결해 드려요.
+            아파트부터 상가·사무실·학교까지. 인증 이력이 없는 건물도 공공 데이터로 등급을 판단하고, 법령 근거와 맞춤
+            지원사업까지 연결해 드려요.
           </p>
           <AddressSearchBar
             value={address}

@@ -33,7 +33,7 @@ export async function SiteFooter() {
         <div>
           <p className="mb-[10px] font-brand text-[24px] font-black text-white">에코 체크</p>
           <p className="max-w-[340px] text-[17px] leading-[1.7] text-[var(--teal-300)]">
-            우리 집 에너지 등급부터 절감 방법, 지원사업까지 — 에코 체크 하나로 다 확인하세요.
+            건물 에너지 등급부터 절감 방법, 지원사업까지 — 에코 체크 하나로 다 확인하세요.
           </p>
         </div>
 

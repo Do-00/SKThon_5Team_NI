@@ -1,0 +1,57 @@
+diff --git a/src/app/api/advisor/route.ts b/src/app/api/advisor/route.ts
+index 0e5e1cb..7d88ee8 100644
+--- a/src/app/api/advisor/route.ts
++++ b/src/app/api/advisor/route.ts
+@@ -29,6 +29,33 @@ const GEMINI_TIMEOUT_MS = 30_000;
+ /** 과부하(503)·호출 제한(429)은 잠깐 뒤 다시 하면 대개 풀린다 — 이 간격으로 두 번까지 다시 시도한다. */
+ const RETRY_DELAYS_MS = [800, 2000];
+ const RETRYABLE_STATUS = new Set([429, 500, 503]);
++
++/**
++ * 같은 건물·같은 질문이면 Gemini 를 다시 부르지 않는다. 무료 등급 할당량(429)을 아끼고,
++ * 시연 중 같은 예시 질문을 눌러도 즉시 같은 답이 나오게 하려고. Gemini 답만 저장한다.
++ */
++const CACHE_TTL_MS = 6 * 60 * 60 * 1000;
++const CACHE_MAX = 200;
++const answerCache = new Map<string, { at: number; body: AdvisorResponse }>();
++
++function cacheKey(req: AdvisorRequest): string {
++  return JSON.stringify([req.question.replace(/\s+/g, " "), req.audience, req.building]);
++}
++
++function readCache(key: string): AdvisorResponse | null {
++  const hit = answerCache.get(key);
++  if (!hit) return null;
++  if (Date.now() - hit.at > CACHE_TTL_MS) {
++    answerCache.delete(key);
++    return null;
++  }
++  return hit.body;
++}
++
++function writeCache(key: string, body: AdvisorResponse) {
++  if (answerCache.size >= CACHE_MAX) answerCache.delete(answerCache.keys().next().value as string);
++  answerCache.set(key, { at: Date.now(), body });
++}
+ const MAX_QUESTION_CHARS = 300;
+ const HIT_LIMIT = 8;
+ 
+@@ -223,6 +250,10 @@ export async function POST(request: Request) {
+   if (!question || !req?.building) return NextResponse.json({ message: "질문과 건물 정보가 필요합니다" }, { status: 400 });
+   req = { ...req, question, audience: req.audience === "tenant" ? "tenant" : "owner" };
+ 
++  const key = cacheKey(req);
++  const cachedBody = readCache(key);
++  if (cachedBody) return NextResponse.json(cachedBody);
++
+   const hits = searchLaw(expandQuery(question, contextTerms(req)), HIT_LIMIT * 2)
+     .filter((hit) => keepForRegion(hit, req.building.region))
+     .slice(0, HIT_LIMIT);
+@@ -246,6 +277,7 @@ export async function POST(request: Request) {
+       lawAsOf: lawCorpusGeneratedAt(),
+       ...(fallbackReason ? { fallbackReason } : {}),
+     };
++    if (source === "gemini") writeCache(key, body);
+     return NextResponse.json(body);
+   };
+ 

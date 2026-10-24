@@ -108,10 +108,27 @@ const RAW_PROGRAMS: readonly RawProgram[] = [
     target_desc: "그린리모델링 공사를 하려는 건축물 소유자(주택 포함). 2026년 기준 고가주택 기준 공시가격 12억원 이하",
     support_desc: "에너지성능개선 공사비에 대한 저리 융자 이자지원. 2026년 협약은행에 경남은행·전북은행 추가",
     amount_desc: "이자지원율 기본 4.5%, 우대 조건 충족 시 최대 5.5% (2026년 기준, 국토교통부공고 제2026-876호)",
-    period: "2026년 공고일부터 선착순 접수(예산 약 80억원 소진 시 마감) — 9월 기준 접수 중",
+    period: "2026년 공고일부터 선착순 접수 (예산 약 80억원 소진 시 마감, 잔여 예산은 창조센터에서 확인)",
     apply_method: "그린리모델링창조센터(greenremodeling.or.kr) 온라인 신청, 협약은행 방문",
     source_url: "https://www.greenremodeling.or.kr/",
-    note: "융자 상품이므로 신용/담보 심사 있음. 2026.9 기준 실제 공고 내용으로 갱신함",
+    note: "융자 상품이므로 신용/담보 심사 있음. 주거·비주거 모두 대상(공동주택 3,000만원, 단독주택 1억원, 비주거 200억원 한도). 2026.9 기준 실제 공고 내용으로 갱신함",
+  },
+  {
+    id: "natl-public-green-remodeling-2026",
+    scope: "national",
+    sido: "전국",
+    sigungu: null,
+    program_name: "공공건축물 그린리모델링 2.0 지원사업",
+    agency: "국토교통부 / 국토안전관리원(그린리모델링창조센터)",
+    target_types: ["owner"],
+    categories: ["insulation", "window", "general"],
+    target_desc: "도서관·유치원·평생교육시설·노인복지시설 등 28개 지정 용도의 공공건축물 중 사용승인 10년 이상(2016.1.1 이전)",
+    support_desc: "노후 공공건축물의 단열·창호·설비 개선 공사비 국비 지원. 지자체·공공기관이 신청",
+    amount_desc: "국비 서울·중앙행정기관·공공기관 50%, 그 외 지자체 70% (2026년 총 1,688억원)",
+    period: "2026년 공모 (지자체·공공기관 신청, 다음 공모는 창조센터 공지 확인)",
+    apply_method: "소관 지자체·공공기관이 그린리모델링창조센터 공모에 신청",
+    source_url: "https://www.greenremodeling.or.kr/",
+    note: "개인이 아니라 시설을 관리하는 기관이 신청합니다. 2026년 공공건축물 그린리모델링 2.0 지원사업 가이드라인 기준",
   },
   {
     id: "natl-low-income-cooling-2026",
@@ -398,7 +415,7 @@ const RAW_PROGRAMS: readonly RawProgram[] = [
     target_desc: "대흥지구 뉴:빌리지 사업구역 내 준공 20년 경과 2층 이하 단독주택(총 40호)",
     support_desc: "노후주택 개보수 공사비 지원. 임대인-임차인 4년 임차보장·임차료 동결 합의 시 자부담 경감",
     amount_desc: "호당 최대 1,441만원(기본 자부담 10%, 임대차 합의시 자부담 5%)",
-    period: "2026.9.7(월)~9.11(금) 방문접수 — 오늘(9.11)이 마지막 날, 마감 임박",
+    period: "2026.9.7(월)~9.11(금) 방문접수 마감 — 추가 모집은 구청 공고 확인",
     apply_method: "중구청 도시재생과 방문접수",
     source_url: "https://www.sisajournal.com/news/articleView.html?idxno=384472",
     note: "특정 재생사업구역 한정, 전역 적용 아님",
@@ -606,6 +623,11 @@ function toSupportProgram(raw: RawProgram): SupportProgram {
 }
 
 const SUPPORT_PROGRAMS: readonly SupportProgram[] = RAW_PROGRAMS.map(toSupportProgram);
+
+/** 검색형 AI 상담의 색인용 — 서버에서 동기로 한 번 읽는다. */
+export function listSupportProgramsSync(): readonly SupportProgram[] {
+  return SUPPORT_PROGRAMS;
+}
 
 /** Returns every active support program. */
 export async function getSupportPrograms(): Promise<SupportProgram[]> {

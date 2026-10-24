@@ -108,7 +108,7 @@ export function GradeDistributionChart({
                   >
                     <span className={styles.valueLabel}>
                       {entry.isCurrentBuildingGrade
-                        ? "우리 집"
+                        ? "이 건물"
                         : formatNumber(entry.count ?? 0)}
                     </span>
                     <span

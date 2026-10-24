@@ -7,7 +7,10 @@ import { REMODEL_MEASURES } from "@/src/lib/remodel-report";
  * (`eligibleUserTypes`) — no fixture data is changed or duplicated.
  */
 
-export type AudienceFilter = "owner" | "tenant";
+export type AudienceFilter = "owner" | "tenant" | "hoa" | "corporation";
+
+/** 주거(아파트·주택)인지, 상가·사무실·학교 같은 비주거인지 — 고를 수 있는 사용자 유형이 달라진다. */
+export type BuildingKind = "residential" | "nonResidential";
 
 export interface AudienceOption {
   value: AudienceFilter;
@@ -15,10 +18,22 @@ export interface AudienceOption {
   description: string;
 }
 
-export const AUDIENCE_OPTIONS: AudienceOption[] = [
-  { value: "owner", label: "소유주", description: "직접 소유한 주택입니다" },
-  { value: "tenant", label: "임차인", description: "전·월세로 거주 중입니다" },
+const RESIDENTIAL_AUDIENCES: AudienceOption[] = [
+  { value: "owner", label: "소유주", description: "직접 소유한 집이에요" },
+  { value: "tenant", label: "임차인", description: "전·월세로 살고 있어요" },
+  { value: "hoa", label: "입주자대표회의·관리단", description: "외벽·지붕 같은 공용부를 함께 결정해요" },
 ];
+
+const NON_RESIDENTIAL_AUDIENCES: AudienceOption[] = [
+  { value: "owner", label: "건물주", description: "건물을 소유하고 있어요" },
+  { value: "tenant", label: "입주 사업자", description: "상가·사무실을 임차해 쓰고 있어요" },
+  { value: "corporation", label: "법인·공공기관 담당자", description: "회사·학교·복지시설 건물을 관리해요" },
+];
+
+export function audienceOptionsFor(kind: BuildingKind): AudienceOption[] {
+  return kind === "residential" ? RESIDENTIAL_AUDIENCES : NON_RESIDENTIAL_AUDIENCES;
+}
+
 
 export interface GuideFilterState {
   audience: AudienceFilter;
@@ -42,7 +57,7 @@ export function sortByRecommendedRemodel(actions: EcoAction[]): EcoAction[] {
   return [...actions].sort((a, b) => rank(a) - rank(b));
 }
 
-/** Applies the owner/tenant filter to the full action list. */
+/** Applies the user-type filter to the full action list. */
 export function filterActions(actions: EcoAction[], filters: GuideFilterState): EcoAction[] {
   return actions.filter((action) => action.eligibleUserTypes.includes(filters.audience));
 }

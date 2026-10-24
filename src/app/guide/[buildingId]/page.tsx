@@ -38,6 +38,13 @@ export default async function GuidePage({ params }: PageProps<"/guide/[buildingI
           actions={actions}
           currentGrade={building.grade}
           currentPrimaryEnergyKwh={building.primaryEnergyKwh}
+          buildingKind={
+            building.general
+              ? building.general.judgement.isResidential
+                ? "residential"
+                : "nonResidential"
+              : "residential"
+          }
         />
       </PageSection>
     </SiteShell>

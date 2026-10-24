@@ -58,13 +58,13 @@ interface Factor {
   reason: string;
 }
 
-/** /api/apt/model 의 featureImportance 와 같은 값입니다. */
+/** /api/apt/model 의 featureImportance 를 묶은 값입니다 (model/train.py 로 생성, 반올림). */
 const FACTORS: Factor[] = [
   { label: "동수 · 연면적 · 세대당 면적", weight: 64, reason: "외벽이 얼마나 넓은가. 같은 세대수라도 여러 동에 흩어질수록 열이 빠져나갈 면이 많아집니다" },
-  { label: "난방 방식", weight: 15, reason: "지역난방은 열병합 폐열을 쓰기 때문에 개별 가스보일러보다 1차에너지 환산에서 유리합니다" },
-  { label: "준공 연도", weight: 10, reason: "준공 시점에 적용된 법정 단열 기준이 성능의 하한을 정합니다" },
-  { label: "세대수", weight: 4, reason: "단지 규모에 따라 공용부 비중이 달라집니다" },
-  { label: "복도 유형", weight: 1, reason: "복도식은 외기에 닿는 면이 많아 계단식보다 불리합니다" },
+  { label: "난방 방식", weight: 17, reason: "지역난방은 열병합 폐열을 쓰기 때문에 개별 가스보일러보다 1차에너지 환산에서 유리합니다" },
+  { label: "준공 연도 · 단열기준 시기", weight: 11, reason: "준공 시점에 적용된 법정 단열 기준이 성능의 하한을 정합니다" },
+  { label: "세대수", weight: 6, reason: "단지 규모에 따라 공용부 비중이 달라집니다" },
+  { label: "복도 유형", weight: 2, reason: "복도식은 외기에 닿는 면이 많아 계단식보다 불리합니다" },
 ];
 
 interface Outcome {
@@ -100,7 +100,7 @@ export function EstimationMethod() {
       {/* ── 도입: 문제 규모 ───────────────────────────────── */}
       <div className="flex flex-col gap-[var(--space-3)]">
         <h2 className="font-sans text-[26px] font-bold tracking-normal text-[var(--text-strong)]">
-          추정 알고리즘
+          서울 아파트는 더 정밀하게: 추정 모델
         </h2>
         <p className="text-[19px] leading-[1.7] text-[var(--text-body)]">
           서울 아파트{" "}
@@ -241,8 +241,8 @@ export function EstimationMethod() {
 
         <dl className="grid grid-cols-2 gap-[var(--space-4)] sm:grid-cols-4">
           {[
-            { k: "평균 오차", v: "22.7", u: "kWh/m²·yr" },
-            { k: "설명력 R²", v: "0.626", u: "" },
+            { k: "평균 오차", v: "24.0", u: "kWh/m²·yr" },
+            { k: "설명력 R²", v: "0.620", u: "" },
             { k: "학습 표본", v: "324", u: "개 단지" },
             { k: "추정 제외", v: "48", u: "%" },
           ].map((m) => (
@@ -259,7 +259,7 @@ export function EstimationMethod() {
         </dl>
 
         <p className="text-[17px] leading-[1.6] text-[var(--text-muted)]">
-          비교 기준: 같은 조건 단지들의 중앙값만 쓰면 평균 오차가 41.0입니다. 모델은 그보다 45% 정확합니다.
+          비교 기준: 모델 없이 같은 단열기준 시기 단지들의 중앙값만 쓰면 평균 오차가 40.9입니다. 모델은 그보다 41% 정확합니다.
         </p>
       </Card>
 

@@ -24,7 +24,7 @@ public class SeedDataService {
     // "완전히 같은 키"끼리만 비교하니 문자열 부분포함으로 인한 오매칭도 사라진다.
     private Map<String, List<BuildingRecord>> buildingsByDongJibunKey;
 
-    /** 용도별 동네 통계. 비주거용을 걷어낸 뒤라 사실상 주거용 한 벌입니다. */
+    /** 용도별 동네 통계. 주거용·전체는 아파트만, "주거용 이외"는 비주거 인증 실적으로 만듭니다. */
     private Map<String, Map<String, DistrictInfo>> districtByPurpose;
 
     /**
@@ -66,6 +66,10 @@ public class SeedDataService {
         // 처음부터 아파트만으로 다시 계산되고, 어딘가에서 섞인 값이 새어 나올 구멍이 없습니다.
         //
         // seed.json 파일 자체는 건드리지 않습니다. 메모리에 올린 목록만 줄입니다.
+        // 동네 비교 지도는 비주거 건물도 비주거 인증 실적끼리 비교합니다(2026-10-24 전체 건축물 확장).
+        // 그래서 용도별 동네 통계만은 걷어내기 전 전체 목록으로 만듭니다. 그룹·매칭 통계는 아래에서 그대로 아파트만 씁니다.
+        Map<String, Map<String, DistrictInfo>> allPurposes = RegionFixer.buildByPurpose(seedData.getBuildings());
+
         int before = seedData.getBuildings().size();
         List<BuildingRecord> apartments = seedData.getBuildings().stream()
                 .filter(b -> ReportController.isApartment(b.getPurpose()))
@@ -75,6 +79,9 @@ public class SeedDataService {
                 + apartments.size() + "건 유지, " + (before - apartments.size()) + "건 제외");
 
         districtByPurpose = RegionFixer.buildByPurpose(seedData.getBuildings());
+        // 주거용·전체는 예전과 똑같이 아파트만으로 계산한 값을 쓰고, 비주거만 전체 목록에서 가져옵니다.
+        Map<String, DistrictInfo> nonResidential = allPurposes.get("주거용 이외");
+        if (nonResidential != null) districtByPurpose.put("주거용 이외", nonResidential);
         System.out.println("[RegionFixer] 동네 통계 — 아파트 "
                 + districtByPurpose.getOrDefault("주거용", Map.of()).size() + "개 동네"
                 + " / 지도에 찍을 전국 동네 " + districtUniverse.size() + "개");
