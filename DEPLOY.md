@@ -1,6 +1,6 @@
 # 외부 링크 배포 (심사위원이 URL로 열어 보는 용도)
 
-이름 규칙: 팀명은 NI로 통일한다. 
+이름 규칙: 팀명은 NI로 통일한다. 학교명은 쓰지 않는다. 서비스 이름 예) `ecocheck-gr`.
 
 ## 1. 백엔드 beec → Render (Docker)
 1. render.com → New → Web Service → 저장소 연결 → **Root Directory: `beec`**, Runtime: **Docker**
